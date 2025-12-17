@@ -183,6 +183,7 @@ void _sym_push_path_constraint(nullable SymExpr constraint, int taken,
 SymExpr _sym_get_input_byte(size_t offset, uint8_t concrete_value);
 void _sym_make_symbolic(const void *data, size_t byte_length,
                         size_t input_offset);
+void _sym_report_path_constraint_sequence();
 
 /*
  * Memory management

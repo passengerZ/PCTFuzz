@@ -149,7 +149,7 @@ SymExpr _sym_read_memory(uint8_t *addr, size_t length, bool little_endian) {
     return nullptr;
 
   ReadOnlyShadow shadow(addr, length);
-  return std::accumulate(shadow.begin_non_null(), shadow.end_non_null(),
+  SymExpr mem = std::accumulate(shadow.begin_non_null(), shadow.end_non_null(),
                          static_cast<SymExpr>(nullptr),
                          [&](SymExpr result, SymExpr byteExpr) {
                            if (result == nullptr)
@@ -159,6 +159,7 @@ SymExpr _sym_read_memory(uint8_t *addr, size_t length, bool little_endian) {
                                       ? _sym_concat_helper(byteExpr, result)
                                       : _sym_concat_helper(result, byteExpr);
                          });
+  return mem;
 }
 
 void _sym_write_memory(uint8_t *addr, size_t length, SymExpr expr,
@@ -467,6 +468,10 @@ void _sym_make_symbolic(const void *data, size_t byte_length,
   std::generate(shadow.begin(), shadow.end(), [&, i = 0]() mutable {
     return _sym_get_input_byte(input_offset++, data_bytes[i++]);
   });
+}
+
+void _sym_report_path_constraint_sequence() {
+  std::cerr << "xxxx : _sym_report_path_constraint_sequence \n";
 }
 
 void symcc_make_symbolic(const void *start, size_t byte_length) {

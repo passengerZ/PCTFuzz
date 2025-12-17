@@ -6,6 +6,7 @@
 #include "compiler.h"
 #include "allocation.h"
 #include <llvm/ADT/APSInt.h>
+#include <llvm/ADT/APFloat.h>
 
 #define EXPR_COMPLEX_LEVEL_THRESHOLD 4
 #define XXH_STATIC_LINKING_ONLY

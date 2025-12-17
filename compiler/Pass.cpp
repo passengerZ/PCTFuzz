@@ -56,6 +56,7 @@ bool instrumentModule(Module &M) {
 
   // Redirect calls to external functions to the corresponding wrappers and
   // rename internal functions.
+  M.getFunctionList();
   for (auto &function : M.functions()) {
     auto name = function.getName();
     if (isInterceptedFunction(function))

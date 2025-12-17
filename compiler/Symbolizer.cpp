@@ -468,6 +468,13 @@ void Symbolizer::visitCmpInst(CmpInst &I) {
 }
 
 void Symbolizer::visitReturnInst(ReturnInst &I) {
+  if (I.getFunction()->hasName() &&
+      I.getFunction()->getName().equals("main")){
+    IRBuilder<> IRB(&I);
+    SymFnT handler = runtime.reportPCTree;
+    forceBuildRuntimeCall(IRB, handler, {});
+  }
+
   // Upon return, we just store the expression for the return value.
 
   if (I.getReturnValue() == nullptr)

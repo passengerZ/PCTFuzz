@@ -80,6 +80,7 @@ struct Runtime {
   SymFnT notifyCall{};
   SymFnT notifyRet{};
   SymFnT notifyBasicBlock{};
+  SymFnT reportPCTree{};
 
   /// Mapping from icmp predicates to the functions that build the corresponding
   /// symbolic expressions.

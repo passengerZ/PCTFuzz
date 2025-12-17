@@ -1,5 +1,6 @@
 #include "range.h"
 
+
 #include <llvm/ADT/SmallString.h>
 
 namespace qsym {
@@ -11,6 +12,17 @@ namespace qsym {
     llvm::SmallString<16> str;
     i.toString(str, radix, false);
     return static_cast<std::string>(str);
+#endif
+  }
+
+  std::string LLVMFloatToString(const llvm::APFloat &i, unsigned radix) {
+#if LLVM_VERSION_MAJOR < 13
+    return i.toString(radix, false);
+#else
+    double d = i.convertToDouble();
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(radix) << d;
+    return oss.str();
 #endif
   }
 

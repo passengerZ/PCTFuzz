@@ -88,7 +88,7 @@ Solver::Solver(
   , inputs_()
   , out_dir_(out_dir)
   , context_(*g_z3_context)
-  , solver_(z3::solver(context_, "QF_BV"))
+  , solver_(z3::solver(context_, "QF_BVFP"))
   , num_generated_(0)
   , trace_(bitmap)
   , last_interested_(false)
@@ -120,8 +120,9 @@ void Solver::pop() {
 }
 
 void Solver::add(z3::expr expr) {
-  if (!expr.is_const())
+  if (!expr.is_const()){
     solver_.add(expr.simplify());
+  }
 }
 
 z3::check_result Solver::check() {
@@ -300,6 +301,21 @@ std::vector<UINT8> Solver::getConcreteValues() {
   std::vector<UINT8> values = inputs_;
   for (unsigned i = 0; i < num_constants; i++) {
     z3::func_decl decl = m.get_const_decl(i);
+
+    /// FIXME: Ugly code, a general method is needed.
+    if (decl.decl_kind() == Z3_OP_FPA_RM_NEAREST_TIES_TO_EVEN ||
+        decl.decl_kind() == Z3_OP_FPA_RM_NEAREST_TIES_TO_AWAY ||
+        decl.decl_kind() == Z3_OP_FPA_RM_TOWARD_POSITIVE ||
+        decl.decl_kind() == Z3_OP_FPA_RM_TOWARD_NEGATIVE ||
+        decl.decl_kind() == Z3_OP_FPA_RM_TOWARD_ZERO ||
+        decl.decl_kind() == Z3_OP_FPA_NUM ||
+        decl.decl_kind() == Z3_OP_FPA_PLUS_INF ||
+        decl.decl_kind() == Z3_OP_FPA_MINUS_INF ||
+        decl.decl_kind() == Z3_OP_FPA_NAN ||
+        decl.decl_kind() == Z3_OP_FPA_PLUS_ZERO ||
+        decl.decl_kind() == Z3_OP_FPA_MINUS_ZERO)
+      continue;
+
     z3::expr e = m.get_const_interp(decl);
     z3::symbol name = decl.name();
 

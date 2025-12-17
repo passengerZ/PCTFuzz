@@ -187,6 +187,7 @@ Runtime::Runtime(Module &M) {
   notifyCall = import(M, "_sym_notify_call", voidT, intPtrType);
   notifyRet = import(M, "_sym_notify_ret", voidT, intPtrType);
   notifyBasicBlock = import(M, "_sym_notify_basic_block", voidT, intPtrType);
+  reportPCTree = import(M, "_sym_report_path_constraint_sequence", voidT);
 }
 
 /// Decide whether a function is called symbolically.

@@ -60,6 +60,35 @@ Kind negateKind(Kind kind) {
       return Sle;
     case Sge:
       return Slt;
+
+    case FOgt:
+      return FUle;
+    case FOge:
+      return FUlt;
+    case FOlt:
+      return FUge;
+    case FOle:
+      return FUgt;
+    case FOeq:
+      return FUne;
+    case FOne:
+      return FUeq;
+    case FOrd:
+      return FUno;
+    case FUno:
+      return FOrd;
+    case FUgt:
+      return FOle;
+    case FUge:
+      return FOlt;
+    case FUlt:
+      return FOge;
+    case FUle:
+      return FOgt;
+    case FUeq:
+      return FOne;
+    case FUne:
+      return FOeq;
     default:
       UNREACHABLE();
       return Invalid;
@@ -78,6 +107,21 @@ bool isNegatableKind(Kind kind) {
     case Sle:
     case Sgt:
     case Sge:
+
+    case FOgt:
+    case FOge:
+    case FOlt:
+    case FOle:
+    case FOeq:
+    case FOne:
+    case FOrd:
+    case FUno:
+    case FUgt:
+    case FUge:
+    case FUlt:
+    case FUle:
+    case FUeq:
+    case FUne:
       return true;
     default:
       return false;
@@ -123,6 +167,21 @@ bool isRelational(const Expr* e) {
     case LAnd:
     case LOr:
     case LNot:
+
+    case FOgt:
+    case FOge:
+    case FOlt:
+    case FOle:
+    case FOeq:
+    case FOne:
+    case FOrd:
+    case FUno:
+    case FUgt:
+    case FUge:
+    case FUlt:
+    case FUle:
+    case FUeq:
+    case FUne:
       return true;
     default:
       return false;
@@ -383,6 +442,10 @@ void ConstantExpr::print(ostream& os, UINT depth) const {
     os << "0x" << LLVMIntToString(value_, 16);
 }
 
+void ConstantFloatExpr::print(ostream& os, UINT depth) const {
+  os << LLVMFloatToString(value_, 2);
+}
+
 void ConcatExpr::print(ostream& os, UINT depth) const {
   bool start = true;
   for (INT32 i = 0; i < num_children(); i++) {
@@ -426,6 +489,12 @@ DEFINE_EXPR_PRINT("/_s", SDiv);
 DEFINE_EXPR_PRINT("/_u", UDiv);
 DEFINE_EXPR_PRINT("%_s", SRem);
 DEFINE_EXPR_PRINT("%_u", URem);
+
+DEFINE_EXPR_PRINT("+", FAdd);
+DEFINE_EXPR_PRINT("-", FSub);
+DEFINE_EXPR_PRINT("*", FMul);
+DEFINE_EXPR_PRINT("/", FDiv);
+DEFINE_EXPR_PRINT("%", FRem);
 #undef DEFINE_EXPR_PRINT
 
 
