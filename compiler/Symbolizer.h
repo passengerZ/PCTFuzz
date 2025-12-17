@@ -29,7 +29,7 @@ public:
   explicit Symbolizer(llvm::Module &M)
       : runtime(M), dataLayout(M.getDataLayout()),
         ptrBits(M.getDataLayout().getPointerSizeInBits()),
-        intPtrType(M.getDataLayout().getIntPtrType(M.getContext())) {}
+        intPtrType(M.getDataLayout().getIntPtrType(M.getContext())){}
 
   /// Insert code to obtain the symbolic expressions for the function arguments.
   void symbolizeFunctionArguments(llvm::Function &F);
@@ -133,9 +133,14 @@ public:
   void visitUnreachableInst(llvm::UnreachableInst &);
   void visitInstruction(llvm::Instruction &I);
 
+  void setBBConfigure(std::map<uint64_t,uint32_t> &globalBBIDMap){
+    BBIDMap  = globalBBIDMap;
+  }
+
 private:
   static constexpr unsigned kExpectedMaxPHINodesPerFunction = 16;
   static constexpr unsigned kExpectedSymbolicArgumentsPerComputation = 2;
+  std::map<uint64_t,uint32_t> BBIDMap;
 
   /// A symbolic input.
   struct Input {
@@ -302,6 +307,12 @@ private:
   llvm::ConstantInt *getTargetPreferredInt(void *pointer) {
     return llvm::ConstantInt::get(intPtrType,
                                   reinterpret_cast<uint64_t>(pointer));
+  }
+
+  llvm::ConstantInt* getBBID(uint64_t ADDR){
+    if (BBIDMap.find(ADDR) != BBIDMap.end())
+      return llvm::ConstantInt::get(intPtrType, BBIDMap[ADDR]);
+    return llvm::ConstantInt::get(intPtrType, -1);
   }
 
   /// Compute the offset of a member in a (possibly nested) aggregate.

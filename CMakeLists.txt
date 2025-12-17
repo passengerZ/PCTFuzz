@@ -57,44 +57,8 @@ set(SYM_RUNTIME_BUILD_ARGS
   -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
   -DZ3_TRUST_SYSTEM_VERSION=${Z3_TRUST_SYSTEM_VERSION})
 
-#ExternalProject_Add(SymCCRuntime
-#  SOURCE_DIR ${CMAKE_SOURCE_DIR}/runtime
-#  CMAKE_ARGS
-#  ${SYM_RUNTIME_BUILD_ARGS}
-#  -DCMAKE_EXPORT_COMPILE_COMMANDS=${CMAKE_EXPORT_COMPILE_COMMANDS}
-#  -DZ3_DIR=${Z3_DIR}
-#  -DLLVM_DIR=${LLVM_DIR}
-#  INSTALL_COMMAND ""
-#  BUILD_ALWAYS TRUE)
 
-#ExternalProject_Get_Property(SymCCRuntime BINARY_DIR)
 set(SYMCC_RUNTIME_DIR ${CMAKE_BINARY_DIR})
-
-#if (${TARGET_32BIT})
-#  ExternalProject_Add(SymCCRuntime32
-#    SOURCE_DIR ${CMAKE_SOURCE_DIR}/runtime
-#    CMAKE_ARGS
-#    ${SYM_RUNTIME_BUILD_ARGS}
-#    -DCMAKE_C_FLAGS="${CMAKE_C_FLAGS} -m32"
-#    -DCMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -m32"
-#    -DZ3_DIR=${Z3_32BIT_DIR}
-#    -DLLVM_DIR=${LLVM_32BIT_DIR}
-#    INSTALL_COMMAND ""
-#    BUILD_ALWAYS TRUE)
-#
-#  ExternalProject_Get_Property(SymCCRuntime32 BINARY_DIR)
-#  set(SYMCC_RUNTIME_32BIT_DIR ${BINARY_DIR})
-#endif()
-
-find_package(LLVM REQUIRED CONFIG)
-
-message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
-message(STATUS "Using LLVMConfig.cmake from ${LLVM_DIR}")
-
-if (${LLVM_VERSION_MAJOR} LESS 8 OR ${LLVM_VERSION_MAJOR} GREATER 18)
-  message(WARNING "The software has been developed for LLVM 8 through 18; \
-it is unlikely to work with other versions!")
-endif()
 
 add_definitions(${LLVM_DEFINITIONS})
 include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
@@ -143,4 +107,5 @@ configure_file("compiler/sym++.in" "sym++" @ONLY)
 
 #add_subdirectory(test)
 
+add_subdirectory(expr)
 add_subdirectory(runtime)

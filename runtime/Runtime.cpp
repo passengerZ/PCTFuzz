@@ -17,9 +17,6 @@
 // Definitions that we need for the QSYM backend
 //
 
-#include "Runtime.h"
-#include "../GarbageCollection.h"
-
 // C++
 #if __has_include(<filesystem>)
 #define HAVE_FILESYSTEM 1
@@ -62,9 +59,14 @@
 #include <llvm/ADT/ArrayRef.h>
 
 // Runtime
-#include "../Config.h"
-#include "../LibcWrappers.h"
-#include "../Shadow.h"
+#include "Config.h"
+#include "LibcWrappers.h"
+#include "Shadow.h"
+#include "GarbageCollection.h"
+#include "Runtime.h"
+
+// Protobuf
+#include "qsymExpr.pb.h"
 
 namespace qsym {
 
@@ -90,6 +92,9 @@ std::atomic_flag g_initialized = ATOMIC_FLAG_INIT;
 /// std::map seems to perform slightly better than std::unordered_map on our
 /// workload.
 std::map<SymExpr, qsym::ExprRef> allocatedExpressions;
+
+std::vector<BranchNode> branchConstaints;
+std::map<UINT32, SymbolicExpr> cached;
 
 SymExpr registerExpression(const qsym::ExprRef &expr) {
   SymExpr rawExpr = expr.get();
@@ -377,10 +382,13 @@ SymExpr _sym_build_float_to_unsigned_integer(SymExpr expr, uint8_t bits) {
 }
 
 void _sym_push_path_constraint(SymExpr constraint, int taken,
-                               uintptr_t site_id) {
+                               uintptr_t site_id,
+                               uintptr_t left_id,
+                               uintptr_t right_id) {
   if (constraint == nullptr)
     return;
-  std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n  " << taken << " " << site_id << "\n";
+  BranchNode bNode(constraint, taken, site_id, left_id, right_id);
+  branchConstaints.push_back(bNode);
   g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 }
 
@@ -544,4 +552,176 @@ void _sym_collect_garbage() {
 
 void symcc_set_test_case_handler(TestCaseHandler handler) {
   g_test_case_handler = handler;
+}
+
+//
+// Path Constaints Tree handling
+//
+
+template <typename E>
+constexpr auto to_underlying(E e) noexcept{
+  return static_cast<std::underlying_type_t<E>>(e);
+}
+
+SymbolicExpr serializeQsymExpr(SymExpr expr) {
+  UINT32 hashValue = expr->hash();
+  auto it = cached.find(hashValue);
+  if (it != cached.end())
+    return it->second;
+
+  SymbolicExpr res;
+  SymbolicExpr *child0, *child1, *child2;
+
+  qsym::Kind k = expr->kind();
+  assert(to_underlying(k) <= 79);
+  res.set_type(static_cast<ExprKind>(to_underlying(k)));
+  res.set_bits(expr->bits());
+  res.set_hash(hashValue);
+
+  switch (k) {
+  case Kind::Bool:
+    res.set_value(((BoolExpr *) (expr))->value());
+    break;
+  case Kind::Constant:
+    res.set_value(((ConstantExpr *) (expr))->value().getSExtValue());
+    break;
+  case Kind::Float:
+    res.set_value(
+        ((ConstantFloatExpr *) (expr))->value().bitcastToAPInt().getSExtValue());
+    break;
+  case Kind::Read:{
+    //ReadExpr has a _index of type uint32, so we are safe to assign it to a int64.
+    int index = ((ReadExpr *) (expr))->index();
+    res.set_value(index);
+    res.set_name(("v_" + std::to_string(index)));
+    break;
+  }
+  /* Unary Expression */
+  /// logical expression
+  case Kind::Neg: case Kind::Not: case Kind::LNot:
+  /// floating-point function
+  case Kind::FPToBV: case Kind::BVToFP: case Kind::FPToFP: case Kind::FPToSI:
+  case Kind::FPToUI: case Kind::SIToFP: case Kind::UIToFP: case Kind::FAbs:
+    /// extension operator: the targeted bit-width has been preserved
+  case Kind::ZExt: case Kind::SExt:
+    child0 = res.add_children();
+    *child0 = serializeQsymExpr(expr->getChild(0).get());
+    break;
+  case Kind::Extract:
+    child0 = res.add_children();
+    *child0 = serializeQsymExpr(expr->getChild(0).get());
+    res.set_value(((ExtractExpr *) (expr))->index());
+    break;
+    /* Binary Expression */
+    /// bit-vector expression
+  case Kind::Concat:
+  case Kind::Equal: case Kind::Distinct: case Kind::Ult: case Kind::Ule: case Kind::Ugt:
+  case Kind::Uge: case Kind::Slt: case Kind::Sle: case Kind::Sgt: case Kind::Sge:
+  case Kind::Add: case Kind::Sub: case Kind::Mul: case Kind::UDiv: case Kind::SDiv:
+  case Kind::URem: case Kind::SRem: case Kind::And: case Kind::Or: case Kind::Xor:
+  case Kind::Shl: case Kind::LShr: case Kind::AShr: case Kind::LOr: case Kind::LAnd:
+    /// floating-point expression
+  case Kind::FAdd: case Kind::FSub: case Kind::FMul: case Kind::FDiv: case Kind::FRem:
+  case Kind::FOgt: case Kind::FOge: case Kind::FOlt: case Kind::FOle: case Kind::FOne:
+  case Kind::FOeq: case Kind::FOrd: case Kind::FUne: case Kind::FUno:
+  case Kind::FUlt: case Kind::FUle: case Kind::FUgt: case Kind::FUge: case Kind::FUeq:
+    child0 = res.add_children();
+    child1 = res.add_children();
+    *child0 = serializeQsymExpr(expr->getChild(0).get());
+    *child1 = serializeQsymExpr(expr->getChild(1).get());
+    break;
+    /* Ternary Expression */
+  case Kind::Ite:
+    child0 = res.add_children();
+    child1 = res.add_children();
+    child2 = res.add_children();
+    *child0 = serializeQsymExpr(expr->getChild(0).get());
+    *child1 = serializeQsymExpr(expr->getChild(1).get());
+    *child2 = serializeQsymExpr(expr->getChild(2).get());
+    break;
+  case Kind::Rol:
+  case Kind::Ror:
+  case Kind::Invalid:
+    LOG_FATAL("Unsupported expression kind in serialization");
+    break;
+  default:
+    LOG_FATAL("Unknown expression kind in serialization");
+    break;
+  }
+
+  cached.insert(make_pair(hashValue, res));
+  return res;
+}
+
+std::string toString6digit(INT32 val) {
+  char buf[6 + 1]; // ndigit + 1
+  snprintf(buf, 7, "%06d", val);
+  buf[6] = '\0';
+  return std::string(buf);
+}
+
+uint32_t getTestCaseID() {
+  uint32_t max_number = 0;
+  fs::path output_dir(g_config.outputDir);
+
+  for (const auto& entry : fs::directory_iterator(output_dir)) {
+    if (!entry.is_regular_file())
+      continue;
+
+    std::string filename = entry.path().filename().string();
+
+    // 检查是否以 ".pct" 结尾
+    if (filename.substr(filename.size() - 4) != ".pct")
+      continue;
+
+    std::string number_str = filename.substr(0, filename.size() - 4);
+
+    // 尝试将前缀解析为整数
+    try {
+      // 检查是否全为数字（避免 stoi 抛异常或解析 "123abc" 为 123）
+      if (!number_str.empty() &&
+          std::all_of(number_str.begin(), number_str.end(), ::isdigit)) {
+        uint32_t number = static_cast<uint32_t>(std::stoul(number_str));
+        if (number > max_number)
+          max_number = number;
+      }
+    } catch (const std::exception&) {
+      continue;
+    }
+  }
+
+  return max_number + 1;
+}
+
+void _sym_report_path_constraint_sequence() {
+  ConstraintSequence cs;
+  for(const auto &e : branchConstaints) {
+    if (e.constraint) {
+      /// first meet this constraint
+      SymExpr constraint = e.constraint;
+
+      SequenceNode *node = cs.add_node();
+      node->set_taken((e.taken > 0));
+      node->set_b_id(e.currBB);
+      node->set_b_left(e.leftBB);
+      node->set_b_right(e.rightBB);
+
+      SymbolicExpr *expr = node->mutable_constraint();
+      *expr = serializeQsymExpr(constraint);
+    }
+  }
+
+  std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";
+  ofstream of(fname, std::ofstream::out | std::ofstream::binary);
+  LOG_INFO("New path constraint tree: " + fname + "\n");
+  if (of.fail())
+    LOG_FATAL("Unable to open a file to write results\n");
+
+  // TODO: batch write
+  cs.SerializeToOstream(&of);
+  of.close();
+
+  ifstream inputf(fname, std::ofstream::in | std::ofstream::binary);
+  LOG_INFO("Load path constraint tree: " + fname + "\n");
+  cs.ParseFromIstream(&inputf);
 }

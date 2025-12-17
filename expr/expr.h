@@ -13,7 +13,7 @@
 
 #include "common.h"
 #include "dependency.h"
-#include "third_party/llvm/range.h"
+#include "range.h"
 
 // XXX: need to change into non-global variable?
 namespace qsym {

@@ -470,10 +470,6 @@ void _sym_make_symbolic(const void *data, size_t byte_length,
   });
 }
 
-void _sym_report_path_constraint_sequence() {
-  std::cerr << "xxxx : _sym_report_path_constraint_sequence \n";
-}
-
 void symcc_make_symbolic(const void *start, size_t byte_length) {
   if (!std::holds_alternative<MemoryInput>(g_config.input))
     throw std::runtime_error{"Calls to symcc_make_symbolic aren't allowed when "

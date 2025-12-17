@@ -1,0 +1,102 @@
+syntax = "proto3";
+
+enum ExprKind {
+  Bool = 0;
+  Constant =  1;
+  Read = 2;
+  Concat = 3;
+  Extract = 4;
+  ZExt = 5;
+  SExt = 6;
+  // Arithmetic
+  Add = 7;
+  Sub = 8;
+  Mul = 9;
+  UDiv = 10;
+  SDiv = 11;
+  URem = 12;
+  SRem = 13;
+  Neg =14;
+  // Bit
+  Not = 15;
+  And = 16;
+  Or = 17;
+  Xor = 18;
+  Shl = 19;
+  LShr = 20;
+  AShr = 21;
+  // Compare
+  Equal = 22;
+  Distinct = 23;
+  Ult = 24;
+  Ule = 25;
+  Ugt = 26;
+  Uge = 27;
+  Slt = 28;
+  Sle = 29;
+  Sgt = 30;
+  Sge = 31;
+  // Logical
+  LOr = 32;
+  LAnd = 33;
+  LNot = 34;
+  // Special
+  Ite = 35;
+  // Float expression
+  Float = 36;
+  FAdd = 37;
+  FSub = 38;
+  FMul = 39;
+  FDiv = 40;
+  FRem = 41;
+  FAbs = 42;
+  FOgt = 43;
+  FOge = 44;
+  FOlt = 45;
+  FOle = 46;
+  FOeq = 47;
+  FOne = 48;
+  FOrd = 49;
+  FUno = 50;
+  FUgt = 51;
+  FUge = 52;
+  FUlt = 53;
+  FUle = 54;
+  FUeq = 55;
+  FUne= 56;
+  FPToBV = 57;
+  BVToFP = 58;
+  FPToSI = 59;
+  FPToUI = 60;
+  FPToFP = 61;
+  SIToFP = 62;
+  UIToFP = 63;
+
+  // Virtual operation
+  Rol = 64;
+  Ror = 65;
+  Invalid = 66;
+}
+
+message SymbolicExpr {
+  ExprKind type = 1;
+  uint32 bits   = 2;
+  repeated SymbolicExpr children = 3;
+  uint32 hash   = 4;
+  //only constantExpr has this data member
+  uint64 value  = 5;
+  //only ReadExpr has this data member
+  string name   = 6;
+}
+
+message SequenceNode {
+  SymbolicExpr constraint = 1;
+  uint32  taken  = 2;
+  uint32 b_id    = 3;
+  uint32 b_left  = 4;
+  uint32 b_right = 5;
+}
+
+message ConstraintSequence {
+  repeated SequenceNode node = 1;
+}

@@ -51,8 +51,22 @@ namespace {
 
 static constexpr char kSymCtorName[] = "__sym_ctor";
 
+std::map<uint64_t,uint32_t> globalBBIDMap;
+
+void constructICFG(Module &M){
+  // label the uniq CFG
+  for (auto &F : M.functions()) {
+    for (auto &BB : F){
+      uint32_t BBID = globalBBIDMap.size() + 1;
+      globalBBIDMap[reinterpret_cast<uint64_t>(&BB)] = BBID;
+    }
+  }
+}
+
 bool instrumentModule(Module &M) {
   DEBUG(errs() << "Symbolizer module instrumentation\n");
+
+  constructICFG(M);
 
   // Redirect calls to external functions to the corresponding wrappers and
   // rename internal functions.
@@ -190,6 +204,7 @@ bool instrumentFunction(Function &F) {
   Symbolizer symbolizer(*F.getParent());
   symbolizer.symbolizeFunctionArguments(F);
 
+  symbolizer.setBBConfigure(globalBBIDMap);
   for (auto &basicBlock : F)
     symbolizer.insertBasicBlockNotification(basicBlock);
 
@@ -200,6 +215,7 @@ bool instrumentFunction(Function &F) {
   symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
+  //F.print(llvm::errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
 
