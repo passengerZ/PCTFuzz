@@ -676,9 +676,7 @@ uint32_t getTestCaseID() {
 
     std::string number_str = filename.substr(0, filename.size() - 4);
 
-    // 尝试将前缀解析为整数
     try {
-      // 检查是否全为数字（避免 stoi 抛异常或解析 "123abc" 为 123）
       if (!number_str.empty() &&
           std::all_of(number_str.begin(), number_str.end(), ::isdigit)) {
         uint32_t number = static_cast<uint32_t>(std::stoul(number_str));
@@ -720,8 +718,4 @@ void _sym_report_path_constraint_sequence() {
   // TODO: batch write
   cs.SerializeToOstream(&of);
   of.close();
-
-  ifstream inputf(fname, std::ofstream::in | std::ofstream::binary);
-  LOG_INFO("Load path constraint tree: " + fname + "\n");
-  cs.ParseFromIstream(&inputf);
 }

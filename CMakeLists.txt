@@ -109,3 +109,4 @@ configure_file("compiler/sym++.in" "sym++" @ONLY)
 
 add_subdirectory(expr)
 add_subdirectory(runtime)
+add_subdirectory(transform)

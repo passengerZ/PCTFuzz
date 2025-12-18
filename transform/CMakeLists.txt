@@ -56,40 +56,27 @@ protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${CMAKE_SOURCE_DIR}/runtime/protobuf
 message(STATUS "protoc input : ${CMAKE_SOURCE_DIR}/runtime/protobuf/qsymExpr.proto")
 message(STATUS "protoc output: ${PROTO_SRCS} ${PROTO_HDRS}")
 
-
 set(LLVM_VERSION "" CACHE STRING "LLVM version to use. The corresponding LLVM dev package must be installed.")
-
-# Place the final products in the top-level output directory
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-
-set(SYMCC_RT_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(TRANSFORM_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(QSYM_SOURCE_DIR ${CMAKE_SOURCE_DIR}/expr)
 
 # There is list(TRANSFORM ... PREPEND ...), but it's not available before CMake 3.12.
-set(SymCCRtSrc
-  ${SYMCC_RT_SRC_DIR}/Config.cpp
-  ${SYMCC_RT_SRC_DIR}/RuntimeCommon.cpp
-  ${SYMCC_RT_SRC_DIR}/LibcWrappers.cpp
-  ${SYMCC_RT_SRC_DIR}/Shadow.cpp
-  ${SYMCC_RT_SRC_DIR}/GarbageCollection.cpp
-  ${SYMCC_RT_SRC_DIR}/Runtime.cpp
+set(TransformSrc
+  ${TRANSFORM_SRC_DIR}/BinaryTree.cpp
+  ${TRANSFORM_SRC_DIR}/CXXProgram.cpp
+  ${TRANSFORM_SRC_DIR}/ExprASTVisitor.cpp
+  ${TRANSFORM_SRC_DIR}/TransformPass.cpp
+  ${TRANSFORM_SRC_DIR}/Watcher.cpp
   ${PROTO_SRCS}
 )
 
-add_library(SymCCRtObj OBJECT
-  ${SymCCRtSrc})
+add_executable(Transformer ${TransformSrc})
 
-set_property(TARGET SymCCRtObj PROPERTY POSITION_INDEPENDENT_CODE 1)
-
-add_library(SymCCRtShared SHARED $<TARGET_OBJECTS:SymCCRtObj>)
-add_library(SymCCRtStatic STATIC $<TARGET_OBJECTS:SymCCRtObj>)
-
-target_include_directories(SymCCRtObj PRIVATE
+target_include_directories(Transformer PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}     # for our fake pin.H and Runtime.h
   ${SYMCC_RT_INCLUDE_DIR}) # for common runtime components
 
-target_include_directories(SymCCRtObj SYSTEM PRIVATE
+target_include_directories(Transformer SYSTEM PRIVATE
   ${Z3_CXX_INCLUDE_DIRS}        # for Z3 support
   ${QSYM_SOURCE_DIR}
   ${CMAKE_CURRENT_BINARY_DIR}
@@ -98,37 +85,14 @@ target_include_directories(SymCCRtObj SYSTEM PRIVATE
 # We need to get the LLVM support component for llvm::APInt.
 llvm_map_components_to_libnames(QSYM_LLVM_DEPS support)
 
-set(SymCCRtDeps
+set(TransformDeps
     QsymExprObj
     ${Z3_LIBRARIES}
     ${QSYM_LLVM_DEPS}
     ${PROTOBUF_LIBRARIES})
 
-# Object libraries cannot be linked directly, so we link the final libraries one by one
-# https://gitlab.kitware.com/cmake/cmake/-/issues/18090
-target_link_libraries(SymCCRtShared ${SymCCRtDeps})
-target_link_libraries(SymCCRtStatic ${SymCCRtDeps})
+target_link_libraries(Transformer ${TransformDeps})
 
-# We use std::filesystem, which has been added in C++17. Before its official
-# inclusion in the standard library, Clang shipped the feature first in
-# libc++experimental and later in libc++fs; GCC used to require libstdc++fs. We
-# make no attempt to support those older compiler versions, with one exception:
-# some current LTS distributions ship a GCC that requires libstdc++fs for
-# std::filesystem - we catch this case in order to enable users of such systems
-# to build with the default compiler.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Filesystem COMPONENTS Final Experimental)
-target_link_libraries(SymCCRtObj std::filesystem)
-
-if (NOT TARGET SymCCRtStatic)
-  message(FATAL_ERROR "The backend \"${SYMCC_RT_BACKEND}\" does not produce the target SymCCRtStatic.\
-This is a bug and it should be reported. Please open PR to the symcc-rt repository.")
-endif()
-
-if (NOT TARGET SymCCRtShared)
-  message(FATAL_ERROR "The backend \"${SYMCC_RT_BACKEND}\" does not produce the target SymCCRtShared.\
-This is a bug and it should be reported. Please open PR to the symcc-rt repository.")
-endif()
-
-set_target_properties(SymCCRtStatic PROPERTIES OUTPUT_NAME "symcc-rt")
-set_target_properties(SymCCRtShared PROPERTIES OUTPUT_NAME "symcc-rt")
+target_link_libraries(Transformer std::filesystem)
