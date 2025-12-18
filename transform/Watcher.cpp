@@ -235,8 +235,8 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
 
       int branchTaken  =  pnode.taken() > 0;
 
-//      std::cerr << "[zgf dbg] idx : " << i << ", taken : " << branchTaken << "\n"
-//                << pathCons->toString() << "\n";
+      std::cerr << "[zgf dbg] idx : " << i << ", taken : " << branchTaken << "\n"
+                << pathCons->toString() << "\n";
 
       if (branchTaken) { /// left is the true branch
         if (root->left) {

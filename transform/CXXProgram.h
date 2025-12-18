@@ -98,7 +98,7 @@ public:
 class CXXType : public CXXDecl {
 private:
   std::string name;
-  bool isConst;
+  bool isConst = false;
 
 public:
   CXXType(CXXDecl* parent, llvm::StringRef name, bool isConst);

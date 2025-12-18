@@ -34,45 +34,27 @@ public:
 private:
   CXXCodeBlockRef earlyExitBlock;
   CXXCodeBlockRef entryPointMainBlock;
-  CXXCodeBlockRef trueBlock;
 
-  uint64_t numberOfConstraints = 0;
+  uint64_t counter = 0;
   std::map<ExprRef, std::string> exprToSymbolName; // References strings in `usedSymbols`.
-  std::map<std::string, llvm::StringRef> constToSymbolName;
 
   std::unordered_set<std::string> usedSymbols;
   llvm::StringRef entryPointFirstArgName;
   llvm::StringRef entryPointSecondArgName;
-  llvm::StringRef numConstraintsSatisfiedSymbolName;
-  llvm::StringRef maxNumConstraintsSatisfiedSymbolName;
-  llvm::StringRef numInputsTriedSymbolName;
-  llvm::StringRef numWrongSizedInputsTriedSymbolName;
-  llvm::StringRef libFuzzerCustomCounterArraySymbolName;
-
-  CXXCodeBlockRef getConstraintIsFalseBlock();
-  CXXCodeBlockRef getConstraintIsTrueBlock();
   CXXCodeBlockRef getCurrentBlock() { return entryPointMainBlock; }
-  bool isTrackingNumConstraintsSatisfied() const;
-  bool isTrackingMaxNumConstraintsSatisfied() const;
-  bool isTrackingNumberOfInputsTried() const;
-  bool isTrackingNumberOfWrongSizedInputsTried() const;
-  bool isTrackingWithLibFuzzerCustomCounter() const;
-  bool isRecordingStats() const;
-  bool isTracing() const;
-  bool isUpdatingMaxNumConstraintsSatisfiedAtEnd() const;
-  CXXTypeRef getCounterTy();
-  CXXTypeRef counterTy;
 
   // Helpers for inserting SSA variables and types
   bool isBVType(ExprRef e) const {
     qsym::Kind k = e->kind();
-    bool res = (qsym::Kind::Constant <= k && k <= qsym::Kind::AShr);
+    bool res = (qsym::Kind::Constant <= k && k <= qsym::Kind::AShr) ||
+               (qsym::Kind::FPToBV <= k && k <= qsym::Kind::FPToUI) ;
     return res;
   }
   bool isBoolType(ExprRef e) const {
     qsym::Kind k = e->kind();
     bool res = (qsym::Kind::Bool == k) ||
-               (qsym::Kind::Equal <= k && k <= qsym::Kind::LNot);
+               (qsym::Kind::Equal <= k && k <= qsym::Kind::LNot) ||
+               (qsym::Kind::FOgt <= k && k <= qsym::Kind::FUne);
     return res;
   }
   bool isFPType(ExprRef e) const {
@@ -95,7 +77,7 @@ private:
   }
 
   CXXTypeRef getOrInsertTy(ExprRef expr);
-  CXXTypeRef getBVTy(uint32_t bits);
+  CXXTypeRef getBVTy(uint32_t bits, bool isSign = false);
   std::string getSanitizedVariableName(const std::string& name);
   llvm::StringRef insertSymbol(const std::string& symbolName);
   llvm::StringRef insertSSASymbolForExpr(ExprRef e, const std::string& symbolName);
@@ -103,46 +85,31 @@ private:
   // Function for building various parts of the CXXProgram
   CXXFunctionDeclRef buildEntryPoint();
   void insertHeaderIncludes();
-  void insertMaxNumConstraintsSatisfiedCounterInit();
-  void insertNumInputsCounterInit();
-  void insertNumWrongSizedInputsCounterInit();
-  void insertAtExitHandler();
   void insertBufferSizeGuard(CXXCodeBlockRef cb);
   void insertNumConstraintsSatisifedCounterInit(CXXCodeBlockRef cb);
 
   void insertFreeVariableConstruction(CXXCodeBlockRef cb);
   void insertBranchForConstraint(ExprRef constraint);
   void insertFuzzingTarget(CXXCodeBlockRef cb);
-  void insertNumInputsTriedIncrement(CXXCodeBlockRef cb);
-  void insertLibFuzzerCustomCounterDecl();
   void insertLibFuzzerCustomCounterInc(CXXCodeBlockRef cb);
-
-  void insertUpdateMaxNumConstraintsSatisfiedToBlock(CXXCodeBlockRef cb);
 
   // Visitor and ConstantAssignment helper methods
   std::string getBoolConstantStr(ExprRef e) const;
   std::string getBVConstantStr(ExprRef e) const;
   std::string getFPConstantStr(ExprRef e) const;
-  std::string getFreshSymbol() const;
+  std::string getFreshSymbol();
   void insertSSAStmt(ExprRef e, llvm::StringRef expr,
                      llvm::StringRef preferredSymbolName);
 
   void insertSSAStmt(ExprRef e, llvm::StringRef expr) {
     insertSSAStmt(e, expr, llvm::StringRef());
   }
+  void insertVoidStmt(ExprRef e, llvm::StringRef expr);
 
   void doDFSPostOrderTraversal(ExprRef e);
   bool hasBeenVisited(ExprRef e) const;
-
   llvm::StringRef getSymbolFor(ExprRef e);
 
-  ExprRef convertToBV(ExprRef e);
-  ExprRef convertToFP(ExprRef e);
-
-//  ///////// add by zgf to optimize ReadExpr ///////
-//  std::set<const ReadExpr*> constArray, symbolicArray;
-//  std::map<const ReadExpr*, llvm::StringRef> varToSymbolName;
-//  /////////////////////////////////////////////
 
   // Constants
   void visitConstant(ExprRef e)     override;

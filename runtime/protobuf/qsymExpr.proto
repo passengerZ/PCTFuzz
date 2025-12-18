@@ -65,9 +65,9 @@ enum ExprKind {
   FUeq = 55;
   FUne= 56;
   FPToBV = 57;
-  BVToFP = 58;
-  FPToSI = 59;
-  FPToUI = 60;
+  FPToSI = 58;
+  FPToUI = 59;
+  BVToFP = 60;
   FPToFP = 61;
   SIToFP = 62;
   UIToFP = 63;
