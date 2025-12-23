@@ -216,8 +216,6 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
 
     TreeNode *root = executionTree->getRoot();
     ExprRef pathCons;
-    PCT::TransformPass TP;
-    std::vector<ExprRef> cons;
 
     for (int i = 0; i < cs.node_size(); i++) {
       const SequenceNode &pnode = cs.node(i);
@@ -231,12 +229,11 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
 
       PCTNode bNode(pathCons, (pnode.taken() > 0), isLastPC,
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
-      cons.push_back(pathCons);
 
       int branchTaken  =  pnode.taken() > 0;
 
-      std::cerr << "[zgf dbg] idx : " << i << ", taken : " << branchTaken << "\n"
-                << pathCons->toString() << "\n";
+//      std::cerr << "[zgf dbg] idx : " << i << ", taken : " << branchTaken << "\n"
+//                << pathCons->toString() << "\n";
 
       if (branchTaken) { /// left is the true branch
         if (root->left) {
@@ -254,15 +251,14 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
         if (!root->right) {
           root->right = executionTree->constructTreeNode(root, bNode);
           root->right->data.taken = false;
-//          executionTree->addToBeExploredNodes(root->right);
         }
         root = root->left;
       } else {
         if (root->right) {
           if (root->right->data.constraint->hash() != pathCons->hash()) {
             // if path is divergent, try to rebuild it !
-            std::cerr << "[zgf dbg] right Divergent !!!\n";
             root->right = executionTree->constructTreeNode(root, bNode);
+            std::cerr << "[zgf dbg] right Divergent !!!\n";
           }
 
           root->right->data.taken = false;
@@ -273,15 +269,16 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
         if (!root->left) {
           root->left = executionTree->constructTreeNode(root, bNode);
           root->left->data.taken = true;
-//          executionTree->addToBeExploredNodes(root->left);
         }
         root = root->right;
       }
     }
-
-    TP.build(cons);
   }
-  executionTree->printTree(true);
+
+//  PCT::TransformPass TP;
+//  std::vector<ExprRef> cons;
+//  TP.build(cons);
+  executionTree->printTree(false);
 }
 
 } // namespace qsym

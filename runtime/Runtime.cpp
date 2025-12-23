@@ -697,6 +697,7 @@ void _sym_report_path_constraint_sequence() {
     if (e.constraint) {
       /// first meet this constraint
       SymExpr constraint = e.constraint;
+      std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n";
 
       SequenceNode *node = cs.add_node();
       node->set_taken((e.taken > 0));
