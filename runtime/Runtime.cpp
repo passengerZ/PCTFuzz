@@ -77,6 +77,8 @@ z3::context *g_z3_context;
 
 } // namespace qsym
 
+using namespace pct;
+
 namespace {
 
 /// Indicate whether the runtime has been initialized.

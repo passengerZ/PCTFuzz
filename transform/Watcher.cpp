@@ -44,6 +44,8 @@ namespace fs = std::filesystem;
 
 namespace qsym {
 
+using namespace pct;
+
 ExprBuilder *g_expr_builder;
 Solver *g_solver;
 CallStackManager g_call_stack_manager;

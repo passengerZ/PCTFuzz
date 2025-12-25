@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package pct;
+
 enum ExprKind {
   Bool = 0;
   Constant =  1;
