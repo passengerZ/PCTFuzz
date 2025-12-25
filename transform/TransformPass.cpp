@@ -344,6 +344,7 @@ void TransformPass::insertLibFuzzerCustomCounterInc(
 
 void TransformPass::extractVariables(const std::vector<ExprRef> &constraints){
   for (const auto& e : constraints){
+    std::cerr << e->toString() << "\n";
     std::vector<ExprRef> stack;
     std::set<ExprRef> visited;
 

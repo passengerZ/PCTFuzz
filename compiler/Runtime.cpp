@@ -72,8 +72,7 @@ Runtime::Runtime(Module &M) {
   buildConcat =
       import(M, "_sym_concat_helper", ptrT, ptrT,
              ptrT); // doesn't follow naming convention for historic reasons
-  pushPathConstraint =
-      import(M, "_sym_push_path_constraint",
+  pushPathConstraint = import(M, "_sym_push_path_constraint",
              voidT, ptrT, int1T, intPtrType, intPtrType, intPtrType);
 
   // Overflow arithmetic

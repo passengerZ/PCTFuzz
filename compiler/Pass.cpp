@@ -215,7 +215,7 @@ bool instrumentFunction(Function &F) {
   symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
-  //F.print(llvm::errs());
+  // F.print(llvm::errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
 

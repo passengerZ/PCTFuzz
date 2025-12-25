@@ -6,11 +6,39 @@
 #include <unordered_set>
 #include <vector>
 
-#include "solver.h"
+#include "BinaryTree.h"
+#include "HybridFuzzer.h"
+#include "TransformPass.h"
 #include "call_stack_manager.h"
 #include "qsymExpr.pb.h"
-#include "BinaryTree.h"
-#include "TransformPass.h"
+#include "solver.h"
+
+#include "llvm/Support/CommandLine.h"
+
+using namespace llvm;
+
+cl::opt<std::string> FuzzerName(
+    "fuzzer-name", cl::desc("The name of the fuzzer to work with"),
+    cl::Required
+);
+
+cl::opt<std::string> OutputDir(
+    "output-dir",
+    cl::desc("The AFL output directory"),
+    cl::Required
+);
+
+cl::opt<std::string> SymCCName(
+    "name",
+    cl::desc("Name to use for SymCC"),
+    llvm::cl::init("symcc")
+);
+
+cl::opt<std::string> SymCCTargetBin(
+    cl::Positional,
+    cl::desc("Program under test"),
+    cl::Required
+);
 
 namespace fs = std::filesystem;
 
@@ -216,6 +244,7 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
 
     TreeNode *root = executionTree->getRoot();
     ExprRef pathCons;
+    std::vector<ExprRef> cons;
 
     for (int i = 0; i < cs.node_size(); i++) {
       const SequenceNode &pnode = cs.node(i);
@@ -231,6 +260,10 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
       int branchTaken  =  pnode.taken() > 0;
+      if (branchTaken)
+        cons.push_back(pathCons);
+      else
+        cons.push_back(g_expr_builder->createLNot(pathCons));
 
 //      std::cerr << "[zgf dbg] idx : " << i << ", taken : " << branchTaken << "\n"
 //                << pathCons->toString() << "\n";
@@ -273,16 +306,16 @@ void updatePCTree(const std::vector<std::string>& newFiles) {
         root = root->right;
       }
     }
+    PCT::TransformPass TP;
+    TP.build(cons);
   }
 
-//  PCT::TransformPass TP;
-//  std::vector<ExprRef> cons;
-//  TP.build(cons);
-  executionTree->printTree(false);
+  executionTree->printTree(true);
 }
 
 } // namespace qsym
 
+/*
 int main(int argc, char* argv[]) {
   if (argc != 3) {
     std::cerr << "Usage: " << argv[0] << " <watch_dir> <duration_seconds>\n";
@@ -342,5 +375,62 @@ int main(int argc, char* argv[]) {
   }
 
   std::cout << "Watcher finished after " << durationSec << " seconds.\n";
+  return 0;
+}
+*/
+
+int main (int argc, char* argv[]){
+  cl::ParseCommandLineOptions(argc, argv, "Make SymCC collaborate with AFL.\n");
+
+  std::string output_dir_Str = OutputDir;
+  std::string fuzzer_name = FuzzerName;
+  std::string symcc_name  = SymCCName;
+
+  fs::path output_dir(output_dir_Str);
+  if (!fs::exists(output_dir) || !fs::is_directory(output_dir)) {
+    std::cerr << "The directory "<< output_dir_Str << " does not exist!\n";
+    return 1;
+  }
+
+  auto afl_queue = output_dir / fuzzer_name / "queue";
+  if (!fs::exists(afl_queue) || !fs::is_directory(afl_queue)) {
+    std::cerr << "The AFL queue "<< afl_queue.string() << " does not exist!\n";
+    return 1;
+  }
+
+  auto symcc_dir = output_dir / symcc_name;
+  if (fs::exists(symcc_dir)) {
+    std::cerr << symcc_dir.string() << " already exists; we do not currently support resuming\n";
+    return 1;
+  }
+
+  std::vector<std::string> command;
+  command.push_back(SymCCTargetBin);
+  command.push_back("@@");
+
+  SymCC symcc(symcc_dir, command);
+  auto afl_config = AflConfig::load(output_dir / fuzzer_name);
+  auto state = State::initialize(symcc_dir);
+
+  while (true) {
+    auto maybe_input = afl_config.best_new_testcase(state.processed_files);
+    if (!maybe_input) {
+      std::cout << "Waiting for new test cases...\n";
+      std::this_thread::sleep_for(5s);
+    } else {
+      state.test_input(*maybe_input, symcc, afl_config);
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (now - state.last_stats_output > STATS_INTERVAL_SEC) {
+      try {
+        state.stats.log(state.stats_file);
+        state.last_stats_output = now;
+      } catch (const std::exception& e) {
+        std::cerr << "Failed to log run-time statistics:" << e.what() << "\n";
+      }
+    }
+  }
+
   return 0;
 }
