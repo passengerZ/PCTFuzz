@@ -5,12 +5,16 @@
 #ifndef EX2_BINARYTREE_H
 #define EX2_BINARYTREE_H
 
+#include <cassert>
+#include <filesystem>
 #include <iostream>
 #include <new>
-#include <cassert>
+#include <queue>
 #include <utility>
 
 #include "expr.h"
+
+namespace fs = std::filesystem;
 
 template<typename T>
 class Node {
@@ -18,6 +22,8 @@ class Node {
 
   Node<T> *parent, *left, *right;
   T data;
+  bool isVisited = false;
+  bool isSat     = true;
 
   Node() : parent(NULL), left(NULL), right(NULL) {
     parent = NULL;
@@ -27,8 +33,8 @@ class Node {
 
   Node(T data) : parent(NULL), left(NULL), right(NULL), data(data) {}
 
-  Node(T data, Node<T> *parent, Node<T> *left, Node<T> *right) :
-      parent(parent), left(left), right(right), data(data) {
+  Node(T data, Node<T> *parent, Node<T> *left, Node<T> *right, bool isVisited) :
+      parent(parent), left(left), right(right), data(data), isVisited(isVisited) {
   }
 
   static void walk(const Node<T> *tree);
@@ -49,11 +55,14 @@ class Node {
 struct PCTreeNode {
   PCTreeNode() : constraint(nullptr), taken(false) {}
 
-  PCTreeNode(qsym::ExprRef expr, bool taken, bool isLast,
+  PCTreeNode(qsym::ExprRef expr, fs::path input_file,
+             bool taken, bool isLast,
              uint32_t currBB, uint32_t leftBB, uint32_t rightBB)
-      : constraint(std::move(expr)), taken(taken), isLast(isLast),
+      : constraint(std::move(expr)), input_file(input_file),
+        taken(taken), isLast(isLast),
         currBB(currBB), leftBB(leftBB), rightBB(rightBB){}
   qsym::ExprRef constraint;
+  fs::path input_file;
   bool taken  = false;
   bool isLast = false;
 
@@ -76,19 +85,32 @@ public:
 
   TreeNode *getRoot() { return root; }
 
-  TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
-    return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr);
+  TreeNode *constructTreeNode(TreeNode *parent, PCTNode n, bool isVisited) {
+    return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr, isVisited);
   }
 
-  void addToBeExploredNodes(TreeNode *newNode) {
-    toBeExploredNodes.push_back(*newNode);
+  std::vector<TreeNode *> getToBeExploredNodes() {
+    std::vector<TreeNode*> result;
+    if (!root) return result;
+
+    std::queue<TreeNode*> worklist;
+    worklist.push(root);
+
+    while (!worklist.empty()) {
+      TreeNode* node = worklist.front();
+      worklist.pop();
+      if (!node->isVisited)
+        result.push_back(node);
+
+      if (node->left)  worklist.push(node->left);
+      if (node->right) worklist.push(node->right);
+    }
+    return result;
   }
 
-  std::vector<TreeNode> *getToBeExploredNodes() {
-    return &toBeExploredNodes;
+  int getLeftNodeSize() {
+    return static_cast<int>(getToBeExploredNodes().size());
   }
-
-  int getLeftNodeSize() { return toBeExploredNodes.size(); }
 
   void printTree(bool isFullPrint = false) {
     if (!root) {
@@ -100,7 +122,6 @@ public:
 
 private:
   TreeNode *root;
-  std::vector<TreeNode> toBeExploredNodes;
   std::set<const TreeNode*> fullCache;
 
   bool isFullyBuilt(const TreeNode* node) {
@@ -124,13 +145,16 @@ private:
     }
 
     std::string indent(depth * 2, ' '); // 2 空格缩进每层
-    std::string takenStr = node->data.taken ? "[T]" : "[F]";
-    std::string isFull = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
+    std::string takenStr  = node->data.taken   ? "[T]" : "[F]";
+    std::string isFull    = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
+    std::string isVisited = node->isVisited ? "[YES]" : "[NOO]";
+    isVisited += node->isSat ? "[SAT]" : "[UST]";
 
     // 假设 qsym::ExprRef 支持 toString()
     std::string constraintStr = node->data.constraint->toString();
 
-    std::cout << indent << takenStr << " " << isFull << " " << constraintStr;
+    std::cout << indent << takenStr << " " << isFull
+              << " " << isVisited << " " << constraintStr;
 
     // 可选：打印基本块信息
     std::cout << "  (BB:" << node->data.currBB

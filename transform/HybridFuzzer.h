@@ -57,6 +57,14 @@ std::vector<std::string> insert_input_file(const std::vector<std::string>& comma
   return fixed;
 }
 
+inline bool remove_file(const fs::path& p) {
+  if (!fs::exists(p) || fs::is_directory(p)) {
+    return true;
+  }
+  std::error_code ec;
+  return fs::remove(p, ec);
+}
+
 // ----------------------------
 // AflMap
 // ----------------------------
@@ -77,7 +85,8 @@ public:
   }
 
   bool merge(const AflMap& other) {
-    if (other.data.empty()) return false;
+    if (other.data.empty())
+      return false;
     if (this->data.empty()) {
       this->data = other.data;
       return true;
@@ -234,27 +243,13 @@ public:
     };
   }
 
-  std::optional<fs::path> best_new_testcase(const std::set<fs::path>& seen) const {
+  std::vector<fs::path> get_unseen_seeds(
+      fs::path &dir, const std::set<fs::path>& seen) const {
     std::vector<fs::path> candidates;
-    for (const auto& entry : fs::directory_iterator(queue)) {
-      if (entry.is_regular_file() && seen.find(entry.path()) == seen.end()) {
-        candidates.push_back(entry.path());
-      }
-    }
-
-    if (candidates.empty()) return std::nullopt;
-
-    auto best = *std::max_element(candidates.begin(), candidates.end(),
-                                  [](const fs::path& a, const fs::path& b) {
-                                    return TestcaseScore::new_score(a) < TestcaseScore::new_score(b);
-                                  });
-    return best;
-  }
-
-  std::vector<fs::path> get_unseen_testcases(const std::set<fs::path>& seen) const {
-    std::vector<fs::path> candidates;
-    for (const auto& entry : fs::directory_iterator(queue)) {
-      if (entry.is_regular_file() && seen.find(entry.path()) == seen.end()) {
+    for (const auto& entry : fs::directory_iterator(dir)) {
+      if (entry.is_regular_file() &&
+          seen.find(entry.path()) == seen.end() &&
+          starts_with(entry.path().filename().string(), "id:")) {
         candidates.push_back(entry.path());
       }
     }
@@ -263,17 +258,15 @@ public:
 
   AflShowmapResult run_showmap(const fs::path& testcase_bitmap, const fs::path& testcase) const {
     std::vector<std::string> args = {"timeout", "-k", "5", std::to_string(TIMEOUT), show_map.string()};
-    if (use_qemu_mode) args.push_back("-Q");
+    if (use_qemu_mode)
+      args.emplace_back("-Q");
     args.insert(args.end(), {"-t", "5000", "-m", "none", "-b", "-o", testcase_bitmap.string()});
     auto cmd_with_input = insert_input_file(target_command, testcase);
     args.insert(args.end(), cmd_with_input.begin(), cmd_with_input.end());
 
     // Build command line string
     std::string cmdline;
-    for (const auto& arg : args) {
-      cmdline += arg + " ";
-    }
-
+    for (const auto& arg : args) cmdline += arg + " ";
     std::cerr << "Running afl-showmap as follows: " << cmdline << "\n"; // debug
 
     int pipefd[2];
@@ -345,10 +338,9 @@ public:
 // SymCCResult
 // ----------------------------
 struct SymCCResult {
-  std::vector<fs::path> test_cases;
+  fs::path constraint_file;
   bool killed;
   std::chrono::microseconds total_time;
-  std::optional<std::chrono::microseconds> solver_time;
 };
 
 // ----------------------------
@@ -366,26 +358,8 @@ public:
       , bitmap(output_dir / "bitmap")
       , command(insert_input_file(cmd, input_file)) {}
 
-  static std::chrono::microseconds parse_solver_time(const std::string& output) {
-    std::regex re(R"("solving_time": (\d+))");
-    std::sregex_iterator iter(output.begin(), output.end(), re);
-    std::sregex_iterator end;
-
-    std::smatch last_match;
-    while (iter != end) {
-      last_match = *iter;
-      ++iter;
-    }
-
-    if (last_match.empty())
-      return std::chrono::microseconds(0);
-    uint64_t micros = std::stoull(last_match[1].str());
-    return std::chrono::microseconds(micros);
-  }
-
   SymCCResult run(const fs::path& input, const fs::path& output_dir) {
     fs::copy_file(input, input_file, fs::copy_options::overwrite_existing);
-    //fs::create_directories(output_dir);
 
     std::vector<std::string> args = {"timeout", "-k", "5", std::to_string(TIMEOUT)};
     args.insert(args.end(), command.begin(), command.end());
@@ -430,12 +404,6 @@ public:
 
     auto start = std::chrono::steady_clock::now();
 
-    if (use_standard_input) {
-      // Parent writes input to child's stdin via another pipe (omitted for brevity)
-      // For simplicity, we assume non-stdin mode or rely on SYMCC_INPUT_FILE
-      // In full impl, you'd create a stdin pipe similar to afl-showmap
-    }
-
     close(stderr_pipe[1]);
     std::string stderr_output;
     char buf[4096];
@@ -457,27 +425,15 @@ public:
       killed = true;
     }
 
-    std::vector<fs::path> new_tests;
-    for (const auto& entry : fs::directory_iterator(output_dir)) {
-      if (entry.is_regular_file()) {
-        new_tests.push_back(entry.path());
-      }
-    }
-
-    auto solver_time_opt = parse_solver_time(stderr_output);
-    if (solver_time_opt.count() != 0  && solver_time_opt > total_time) {
-      std::cerr << "Backend reported inaccurate solver time!\n";
-      solver_time_opt = std::chrono::microseconds(total_time.count());
-    }
+    fs::path constriant_path = output_dir / "000001.pct";
 
     // 转换为 microseconds
     auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(total_time);
 
     return SymCCResult{
-        std::move(new_tests),
+        constriant_path,
         killed,
-        total_us,
-        solver_time_opt
+        total_us
     };
   }
 };
@@ -488,7 +444,6 @@ public:
 struct Stats {
   uint32_t total_count = 0;
   std::chrono::microseconds total_time{0};
-  std::optional<std::chrono::microseconds> solver_time;
   uint32_t failed_count = 0;
   std::chrono::microseconds failed_time{0};
 
@@ -499,13 +454,6 @@ struct Stats {
     } else {
       ++total_count;
       total_time += result.total_time;
-      if (result.solver_time) {
-        if (solver_time) {
-          *solver_time += *result.solver_time;
-        } else {
-          solver_time = *result.solver_time;
-        }
-      }
     }
   }
 
@@ -516,19 +464,6 @@ struct Stats {
     if (total_count > 0) {
       auto avg = total_time / total_count;
       out << "Avg time per successful execution: " << avg.count() << "ms\n";
-    }
-
-    if (solver_time) {
-      out << "Solver time (successful executions): " << solver_time->count() << "ms\n";
-      if (total_time.count() > 0) {
-        double share = static_cast<double>(solver_time->count()) /
-                       static_cast<double>(total_time.count()) * 100.0;
-        out << "Solver time share (successful executions): " << std::fixed
-            << std::setprecision(2) << share << "% (-> " << (100.0 - share)
-            << "% in execution)\n";
-        auto avg_solver = *solver_time / total_count;
-        out << "Avg solver time per successful execution: " << avg_solver.count() << "ms\n";
-      }
     }
 
     out << "Failed executions: " << failed_count << "\n";
@@ -549,100 +484,74 @@ struct Stats {
 class State {
 public:
   AflMap current_bitmap;
-  std::set<fs::path> processed_files;
-  TestcaseDir queue, hangs, crashes, conditions;
+  std::set<fs::path> processed_seeds;
+  TestcaseDir queue, hangs, crashes, conditions, solved;
   Stats stats;
-  std::chrono::steady_clock::time_point last_stats_output;
   std::ofstream stats_file;
+  std::chrono::steady_clock::time_point last_stats_output;
 
-  static State initialize(const fs::path& output_dir) {
+  static State initialize(const fs::path& output_dir, const fs::path& fuzzer_output) {
     fs::create_directory(output_dir);
     return State{
         .current_bitmap = AflMap{},
-        .processed_files = {},
-        .queue = TestcaseDir{output_dir / "queue"},
-        .hangs = TestcaseDir{output_dir / "hangs"},
-        .crashes = TestcaseDir{output_dir / "crashes"},
+        .processed_seeds = {},
+        .queue      = TestcaseDir{fuzzer_output / "queue"},
+        .hangs      = TestcaseDir{fuzzer_output / "hangs"},
+        .crashes    = TestcaseDir{fuzzer_output / "crashes"},
         .conditions = TestcaseDir{output_dir / "conditions"},
-        .stats = {},
-        .last_stats_output = std::chrono::steady_clock::now(),
-        .stats_file = std::ofstream{output_dir / "stats"}
+        .solved     = TestcaseDir{output_dir / "solved"},
+        .stats      = {},
+        .stats_file = std::ofstream{output_dir / "stats"},
+        .last_stats_output = std::chrono::steady_clock::now()
     };
   }
 
-  void test_input(const fs::path& input, SymCC& symcc, const AflConfig& afl_config) {
-    std::cerr << "Running on input " << input.string() << "\n";
-
-//    uint64_t num_interesting = 0, num_total = 0;
-
+  fs::path concolic_execution(
+      const fs::path& input, SymCC& symcc, const AflConfig& afl_config) {
     auto result = symcc.run(input, conditions.path);
-//    for (const auto& new_test : result.test_cases) {
-//      auto res = process_new_testcase(new_test, input, tmp_dir, afl_config);
-//      ++num_total;
-//      if (res == TestcaseResult::New) {
-//        ++num_interesting;
-//      }
-//    }
-//
-//    std::cerr << "Generated " << num_total << " testcases, " << num_interesting << " new\n";
-
     if (result.killed) {
       std::cerr << "The target process was killed (probably timeout or OOM); archiving to "
                 << hangs.path.string() << "\n";
-      copy_testcase(input, hangs, input);
+      copy_testcase_to_fuzzer(input, hangs);
     }
-
-    processed_files.insert(input);
+    processed_seeds.insert(input);
     stats.add_execution(result);
+    return result.constraint_file;
   }
 
-private:
-  static void copy_testcase(const fs::path& src, TestcaseDir& dest, const fs::path& parent) {
-    auto parent_filename = parent.filename();
-    std::string orig_name = parent_filename.string();
+  void copy_testcase_to_fuzzer(const fs::path& src, TestcaseDir& dest) {
+    // 格式化新文件名：id:{:06},src:{}
+    std::ostringstream oss;
+    oss << "id:" << std::setw(6)
+        << std::setfill('0') << dest.current_id
+        << ",pctree";
+    std::string new_name = oss.str();
+    fs::path target = dest.path / new_name;
 
-    // 检查是否以 "id:" 开头
-    // 提取 ID 部分：从索引 3 到 8（共 6 个字符）
-    if (orig_name.substr(0, 3) == "id:" &&
-        orig_name.length() >= 9) {
-      std::string orig_id = orig_name.substr(3, 6); // [3, 9)
-
-      // 格式化新文件名：id:{:06},src:{}
-      std::ostringstream oss;
-      oss << "id:" << std::setw(6)
-          << std::setfill('0') << dest.current_id
-          << ",src:" << orig_id;
-      std::string new_name = oss.str();
-      fs::path target = dest.path / new_name;
-
-      try {
-        fs::copy_file(src, target, fs::copy_options::overwrite_existing);
-      } catch (const fs::filesystem_error& e) {
-        std::cerr << "Failed to copy the test case from ["
-                  << src.string() << "] to ["
-                  << dest.path.string() << "] :" << e.what() << "\n";
-      }
-
-      dest.current_id++;
-    } else {
-      std::cerr << "Test case "<< parent.string()
-                << " does not contain a proper ID\n";
+    try {
+      fs::copy_file(src, target, fs::copy_options::overwrite_existing);
+      //processed_seeds.insert(target);
+    } catch (const fs::filesystem_error& e) {
+      std::cerr << "Failed to copy the test case from ["
+                << src.string() << "] to ["
+                << dest.path.string() << "] :" << e.what() << "\n";
     }
+
+    dest.current_id++;
   }
 
-  TestcaseResult process_new_testcase(const fs::path& testcase,
-                                      const fs::path& parent,
-                                      const fs::path& tmp_dir,
-                                      const AflConfig& afl_config) {
+  TestcaseResult evaluate_new_testcase(const fs::path& testcase,
+                                       const fs::path& symcc_dir,
+                                       const AflConfig& afl_config) {
     std::cerr << "Processing test case " << testcase.string() << "\n";
-    auto bitmap_path = tmp_dir / "testcase_bitmap";
+    auto bitmap_path = symcc_dir / "testcase_bitmap";
 
     auto showmap_res = afl_config.run_showmap(bitmap_path, testcase);
     switch (showmap_res.kind) {
     case AflShowmapResultKind::Success: {
       bool interesting = current_bitmap.merge(showmap_res.map);
       if (interesting) {
-        copy_testcase(testcase, queue, parent);
+        copy_testcase_to_fuzzer(testcase, queue);
         return TestcaseResult::New;
       }
       return TestcaseResult::Uninteresting;
@@ -652,8 +561,8 @@ private:
       return TestcaseResult::Hang;
     case AflShowmapResultKind::Crash:
       std::cerr << "Test case " << testcase.string() << " crashes afl-showmap; probably interesting\n";
-      copy_testcase(testcase, crashes, parent);
-      copy_testcase(testcase, queue, parent);
+      copy_testcase_to_fuzzer(testcase, crashes);
+      copy_testcase_to_fuzzer(testcase, queue);
       return TestcaseResult::Crash;
     default:
       return TestcaseResult::Uninteresting;

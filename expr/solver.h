@@ -36,6 +36,8 @@ public:
   void pop();
   void add(z3::expr expr);
   z3::check_result check();
+  void setInputFile(const std::string &input_file);
+  std::string fetchTestcase();
 
   bool checkAndSave(const std::string& postfix="");
   void addJcc(ExprRef, bool, ADDRINT);

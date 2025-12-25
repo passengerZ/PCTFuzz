@@ -96,6 +96,7 @@ std::atomic_flag g_initialized = ATOMIC_FLAG_INIT;
 std::map<SymExpr, qsym::ExprRef> allocatedExpressions;
 
 std::vector<BranchNode> branchConstaints;
+std::set<UINT32> visitedBB;
 std::map<UINT32, SymbolicExpr> cached;
 
 SymExpr registerExpression(const qsym::ExprRef &expr) {
@@ -391,7 +392,7 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
     return;
   BranchNode bNode(constraint, taken, site_id, left_id, right_id);
   branchConstaints.push_back(bNode);
-  g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
+  //g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 }
 
 SymExpr _sym_get_input_byte(size_t offset, uint8_t value) {
@@ -485,6 +486,7 @@ void _sym_notify_ret(uintptr_t site_id) {
 
 void _sym_notify_basic_block(uintptr_t site_id) {
   g_call_stack_manager.visitBasicBlock(site_id);
+  visitedBB.insert(site_id);
 }
 
 //

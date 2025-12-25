@@ -113,6 +113,7 @@ void Solver::push() {
 
 void Solver::reset() {
   solver_.reset();
+  inputs_.clear();
 }
 
 void Solver::pop() {
@@ -294,6 +295,11 @@ void Solver::readInput() {
     inputs_.push_back((UINT8)ch);
 }
 
+void Solver::setInputFile(const std::string &input_file) {
+  input_file_ = input_file;
+  readInput();
+}
+
 std::vector<UINT8> Solver::getConcreteValues() {
   // TODO: change from real input
   z3::model m = solver_.get_model();
@@ -345,14 +351,40 @@ void Solver::saveValues(const std::string& postfix) {
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");
 
-      // TODO: batch write
-      for (unsigned i = 0; i < values.size(); i++) {
-        char val = values[i];
-        of.write(&val, sizeof(val));
-      }
+  // highperformace write
+  if (!values.empty()) {
+    of.write(reinterpret_cast<const char*>(values.data()),
+             static_cast<std::streamsize>(values.size()));
+  }
 
   of.close();
   num_generated_++;
+}
+
+std::string Solver::fetchTestcase() {
+  std::string fname = "";
+  if (check() != z3::sat) {
+    LOG_DEBUG("unsat\n");
+    return fname;
+  }
+
+  std::vector<UINT8> values = getConcreteValues();
+
+  fname = out_dir_+ "/" + toString6digit(num_generated_);
+  ofstream of(fname, std::ofstream::out | std::ofstream::binary);
+  LOG_INFO("New testcase: " + fname + "\n");
+  if (of.fail())
+    LOG_FATAL("Unable to open a file to write results\n");
+
+  // highperformace write
+  if (!values.empty()) {
+    of.write(reinterpret_cast<const char*>(values.data()),
+             static_cast<std::streamsize>(values.size()));
+  }
+
+  of.close();
+  num_generated_++;
+  return fname;
 }
 
 void Solver::printValues(const std::vector<UINT8>& values) {
