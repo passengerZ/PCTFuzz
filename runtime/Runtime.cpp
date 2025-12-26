@@ -95,10 +95,7 @@ std::atomic_flag g_initialized = ATOMIC_FLAG_INIT;
 /// workload.
 std::map<SymExpr, qsym::ExprRef> allocatedExpressions;
 
-std::vector<BranchNode> branchConstaints;
-std::set<UINT32> visitedBB;
 std::map<UINT32, SymbolicExpr> cached;
-
 SymExpr registerExpression(const qsym::ExprRef &expr) {
   SymExpr rawExpr = expr.get();
 
@@ -160,6 +157,11 @@ public:
 
 EnhancedQsymSolver *g_enhanced_solver;
 
+
+std::vector<BranchNode> branchConstaints;
+std::set<UINT32> visitedBB;
+int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
+int runSignal = 0;
 } // namespace
 
 using namespace qsym;
@@ -173,6 +175,10 @@ namespace fs = std::experimental::filesystem;
 void _sym_initialize(void) {
   if (g_initialized.test_and_set())
     return;
+
+  // add exception catch signal handle
+  for (auto sig : signals)
+    signal(sig, _sym_handle_exit);
 
   loadConfig();
   initLibcWrappers();
@@ -388,7 +394,7 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id,
                                uintptr_t left_id,
                                uintptr_t right_id) {
-  if (constraint == nullptr)
+  if (constraint == nullptr || constraint->isBool())
     return;
   BranchNode bNode(constraint, taken, site_id, left_id, right_id);
   branchConstaints.push_back(bNode);
@@ -567,6 +573,7 @@ constexpr auto to_underlying(E e) noexcept{
   return static_cast<std::underlying_type_t<E>>(e);
 }
 
+unsigned MaxVarIndex = 0;
 SymbolicExpr serializeQsymExpr(SymExpr expr) {
   UINT32 hashValue = expr->hash();
   auto it = cached.find(hashValue);
@@ -595,9 +602,11 @@ SymbolicExpr serializeQsymExpr(SymExpr expr) {
     break;
   case Kind::Read:{
     //ReadExpr has a _index of type uint32, so we are safe to assign it to a int64.
-    int index = ((ReadExpr *) (expr))->index();
+    unsigned index = ((ReadExpr *) (expr))->index();
     res.set_value(index);
     res.set_name(("v_" + std::to_string(index)));
+    if (index > MaxVarIndex)
+      MaxVarIndex = index;
     break;
   }
   /* Unary Expression */
@@ -673,13 +682,10 @@ uint32_t getTestCaseID() {
       continue;
 
     std::string filename = entry.path().filename().string();
-
-    // 检查是否以 ".pct" 结尾
     if (filename.substr(filename.size() - 4) != ".pct")
       continue;
 
     std::string number_str = filename.substr(0, filename.size() - 4);
-
     try {
       if (!number_str.empty() &&
           std::all_of(number_str.begin(), number_str.end(), ::isdigit)) {
@@ -695,13 +701,21 @@ uint32_t getTestCaseID() {
   return max_number + 1;
 }
 
+void _sym_handle_exit(int val) {
+  runSignal = val;
+  _sym_report_path_constraint_sequence();
+  exit(val);
+}
+
 void _sym_report_path_constraint_sequence() {
   ConstraintSequence cs;
+  cs.set_varbytes(MaxVarIndex);
+  cs.set_runsignal(runSignal);
+
   for(const auto &e : branchConstaints) {
     if (e.constraint) {
-      /// first meet this constraint
       SymExpr constraint = e.constraint;
-      std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n";
+//      std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n";
 
       SequenceNode *node = cs.add_node();
       node->set_taken((e.taken > 0));

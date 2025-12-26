@@ -225,13 +225,19 @@ void updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     return;
   }
 
-  std::cout << "Load path constraint tree: " << constraint_file.string() << "\n";
   ConstraintSequence cs;
   cs.ParseFromIstream(&inputf);
 
   TreeNode *root = executionTree->getRoot();
-  ExprRef pathCons;
+  if (executionTree->varSizeLowerBound == 0)
+    executionTree->varSizeLowerBound = cs.varbytes();
 
+  // if current varByte less than initial,
+  // may cause path constraint tree Divergent
+  if (cs.varbytes() < executionTree->varSizeLowerBound)
+    return;
+
+  ExprRef pathCons;
   for (int i = 0; i < cs.node_size(); i++) {
     const SequenceNode &pnode = cs.node(i);
     if (!pnode.has_constraint())
@@ -244,46 +250,45 @@ void updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     PCTNode pctNode(pathCons, input, branchTaken, isLastPC,
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
-    root->isVisited = true;
+    root->status = 1;
     if (branchTaken) { /// left is the true branch
       if (root->left) {
         if (root->left->data.constraint->hash() != pathCons->hash()) {
           // if path is divergent, try to rebuild it !
-          root->left = executionTree->constructTreeNode(root, pctNode, isLastPC);
+          root->left = executionTree->constructTreeNode(root, pctNode);
           std::cerr << "[zgf dbg] left Divergent !!!\n";
         }
 
         root->left->data.taken = true;
       } else {
-        root->left = executionTree->constructTreeNode(root, pctNode, isLastPC);
+        root->left = executionTree->constructTreeNode(root, pctNode);
       }
 
       if (!root->right) {
-        root->right = executionTree->constructTreeNode(root, pctNode, isLastPC);
+        root->right = executionTree->constructTreeNode(root, pctNode);
         root->right->data.taken = false;
-//        executionTree->addToBeExploredNodes(root->right, input);
       }
       root = root->left;
     } else {
       if (root->right) {
         if (root->right->data.constraint->hash() != pathCons->hash()) {
           // if path is divergent, try to rebuild it !
-          root->right = executionTree->constructTreeNode(root, pctNode, isLastPC);
+          root->right = executionTree->constructTreeNode(root, pctNode);
           std::cerr << "[zgf dbg] right Divergent !!!\n";
         }
 
         root->right->data.taken = false;
       } else {
-        root->right = executionTree->constructTreeNode(root, pctNode, isLastPC);
+        root->right = executionTree->constructTreeNode(root, pctNode);
       }
 
       if (!root->left) {
-        root->left = executionTree->constructTreeNode(root, pctNode, isLastPC);
+        root->left = executionTree->constructTreeNode(root, pctNode);
         root->left->data.taken = true;
-//        executionTree->addToBeExploredNodes(root->left, input);
       }
       root = root->right;
     }
+    root->status = 1;
   }
 }
 
@@ -439,7 +444,8 @@ int main (int argc, char* argv[]){
       // step(4) : invoke solver to generate multiple inputs
       for (auto node : tobeExplores){
         fs::path input_file = node->data.input_file;
-        node->isVisited = true;
+        assert(node->status == 0);
+        //node->status = 0; // set the node to next input visited
 
         std::vector<PCTNode> constraints;
         auto currNode = node;
@@ -456,10 +462,11 @@ int main (int argc, char* argv[]){
             expr = g_expr_builder->createLNot(expr);
           g_solver->add(expr->toZ3Expr());
         }
+
         std::string new_case = g_solver->fetchTestcase();
         // no solution
         if (new_case.empty()){
-          node->isSat = false;
+          node->status = -1;
           continue;
         }
 

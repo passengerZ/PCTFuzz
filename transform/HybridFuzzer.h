@@ -369,9 +369,9 @@ public:
     setenv("SYMCC_OUTPUT_DIR", output_dir.c_str(), 1);
     setenv("SYMCC_INPUT_FILE", input_file.c_str(), 1);
 
-    std::string cmdline;
-    for (const auto& arg : args) cmdline += arg + " ";
-    std::cerr << "Running SymCC as follows: " << cmdline << "\n";
+//    std::string cmdline;
+//    for (const auto& arg : args) cmdline += arg + " ";
+//    std::cerr << "Running SymCC as follows: " << cmdline << "\n";
 
     int stderr_pipe[2];
     if (pipe(stderr_pipe) == -1) {
@@ -425,9 +425,9 @@ public:
       killed = true;
     }
 
-    fs::path constriant_path = output_dir / "000001.pct";
+//    std::cerr << "[zgf dbg] symcc stderr : " << stderr_output << "\n";
 
-    // 转换为 microseconds
+    fs::path constriant_path = output_dir / "000001.pct";
     auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(total_time);
 
     return SymCCResult{
@@ -530,7 +530,6 @@ public:
 
     try {
       fs::copy_file(src, target, fs::copy_options::overwrite_existing);
-      //processed_seeds.insert(target);
     } catch (const fs::filesystem_error& e) {
       std::cerr << "Failed to copy the test case from ["
                 << src.string() << "] to ["

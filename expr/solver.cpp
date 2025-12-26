@@ -129,9 +129,9 @@ void Solver::add(z3::expr expr) {
 z3::check_result Solver::check() {
   uint64_t before = getTimeStamp();
   z3::check_result res;
-  LOG_STAT(
-      "SMT: { \"solving_time\": " + decstr(solving_time_) + ", "
-      + "\"total_time\": " + decstr(before - start_time_) + " }\n");
+//  LOG_STAT(
+//      "SMT: { \"solving_time\": " + decstr(solving_time_) + ", "
+//      + "\"total_time\": " + decstr(before - start_time_) + " }\n");
   // LOG_DEBUG("Constraints: " + solver_.to_smt2() + "\n");
   try {
     res = solver_.check();
@@ -144,7 +144,7 @@ z3::check_result Solver::check() {
   uint64_t cur = getTimeStamp();
   uint64_t elapsed = cur - before;
   solving_time_ += elapsed;
-  LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
+//  LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
   return res;
 }
 
@@ -291,8 +291,9 @@ void Solver::readInput() {
   }
 
   char ch;
-  while (ifs.get(ch))
+  while (ifs.get(ch)){
     inputs_.push_back((UINT8)ch);
+  }
 }
 
 void Solver::setInputFile(const std::string &input_file) {
@@ -372,7 +373,6 @@ std::string Solver::fetchTestcase() {
 
   fname = out_dir_+ "/" + toString6digit(num_generated_);
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);
-  LOG_INFO("New testcase: " + fname + "\n");
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");
 
@@ -381,6 +381,12 @@ std::string Solver::fetchTestcase() {
     of.write(reinterpret_cast<const char*>(values.data()),
              static_cast<std::streamsize>(values.size()));
   }
+
+//  std::cerr << "[zgf dbg] write_file: " << fname << ": ";
+//  for (auto v : values){
+//    std::cerr << " " << (int)v;
+//  }
+//  std::cerr << " xxxxx\n";
 
   of.close();
   num_generated_++;

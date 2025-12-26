@@ -93,7 +93,7 @@ message SymbolicExpr {
 
 message SequenceNode {
   SymbolicExpr constraint = 1;
-  uint32  taken  = 2;
+  uint32 taken   = 2;
   uint32 b_id    = 3;
   uint32 b_left  = 4;
   uint32 b_right = 5;
@@ -101,4 +101,6 @@ message SequenceNode {
 
 message ConstraintSequence {
   repeated SequenceNode node = 1;
+  uint32 varBytes  = 2;
+  uint32 runSignal = 3;
 }

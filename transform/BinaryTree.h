@@ -22,8 +22,7 @@ class Node {
 
   Node<T> *parent, *left, *right;
   T data;
-  bool isVisited = false;
-  bool isSat     = true;
+  int status = 0;  // -1:unsat, 0:no-visit, 1:visited
 
   Node() : parent(NULL), left(NULL), right(NULL) {
     parent = NULL;
@@ -33,8 +32,8 @@ class Node {
 
   Node(T data) : parent(NULL), left(NULL), right(NULL), data(data) {}
 
-  Node(T data, Node<T> *parent, Node<T> *left, Node<T> *right, bool isVisited) :
-      parent(parent), left(left), right(right), data(data), isVisited(isVisited) {
+  Node(T data, Node<T> *parent, Node<T> *left, Node<T> *right) :
+      parent(parent), left(left), right(right), data(data) {
   }
 
   static void walk(const Node<T> *tree);
@@ -77,6 +76,8 @@ typedef Node<PCTNode> TreeNode;
 
 class ExecutionTree {
 public:
+  unsigned varSizeLowerBound = 0;
+
   ExecutionTree() {
     root = new TreeNode();
   }
@@ -85,8 +86,8 @@ public:
 
   TreeNode *getRoot() { return root; }
 
-  TreeNode *constructTreeNode(TreeNode *parent, PCTNode n, bool isVisited) {
-    return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr, isVisited);
+  TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
+    return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr);
   }
 
   std::vector<TreeNode *> getToBeExploredNodes() {
@@ -99,7 +100,7 @@ public:
     while (!worklist.empty()) {
       TreeNode* node = worklist.front();
       worklist.pop();
-      if (!node->isVisited)
+      if (node->status == 0)
         result.push_back(node);
 
       if (node->left)  worklist.push(node->left);
@@ -126,6 +127,7 @@ private:
 
   bool isFullyBuilt(const TreeNode* node) {
     if (node->data.isLast ||
+        node->status == -1 ||
         fullCache.find(node) != fullCache.end()) {
       fullCache.insert(node);
       return true;
@@ -145,16 +147,16 @@ private:
     }
 
     std::string indent(depth * 2, ' '); // 2 空格缩进每层
-    std::string takenStr  = node->data.taken   ? "[T]" : "[F]";
-    std::string isFull    = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
-    std::string isVisited = node->isVisited ? "[YES]" : "[NOO]";
-    isVisited += node->isSat ? "[SAT]" : "[UST]";
+    std::string takenStr = node->data.taken   ? "[T]" : "[F]";
+    std::string isFull   = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
+    std::string status   = node->status == 1 ? "[has vis]" :
+                           node->status == 0 ? "[will vis]" : "[un sat]";
 
     // 假设 qsym::ExprRef 支持 toString()
     std::string constraintStr = node->data.constraint->toString();
 
     std::cout << indent << takenStr << " " << isFull
-              << " " << isVisited << " " << constraintStr;
+              << " " << status << " " << constraintStr;
 
     // 可选：打印基本块信息
     std::cout << "  (BB:" << node->data.currBB
