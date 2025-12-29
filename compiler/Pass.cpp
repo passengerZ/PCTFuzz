@@ -98,7 +98,7 @@ void genCFGJsonFile(std::string CFGFile) {
 void constructICFG(Module &M){
   auto *CFGFile = getenv("PCT_CFG_PATH");
   if (CFGFile == nullptr){
-    llvm::errs() << "[PCT] Not set PCT_CFG_PATH, do not generate CFG!\n";
+    llvm_unreachable("[PCT] Not set PCT_CFG_PATH, do not generate CFG!\n");
     return;
   }
   llvm::errs() << "[PCT] dump CFG in PCT_CFG_PATH : " << CFGFile << "\n";
@@ -148,6 +148,7 @@ void constructICFG(Module &M){
 
           BasicBlock *enterBB  = &(calledFunc->getBasicBlockList().front());
           uint64_t enterBBAddr = reinterpret_cast<uint64_t>(enterBB);
+          assert(globalBBIDMap.find(enterBBAddr) != globalBBIDMap.end());
           uint32_t enterBBID   = globalBBIDMap[enterBBAddr];
 
           // construct the enter trace
@@ -314,7 +315,7 @@ bool instrumentFunction(Function &F) {
   symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
-  // F.print(llvm::errs());
+  F.print(llvm::errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
 

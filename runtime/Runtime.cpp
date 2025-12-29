@@ -159,9 +159,11 @@ EnhancedQsymSolver *g_enhanced_solver;
 
 
 std::vector<BranchNode> branchConstaints;
-std::set<UINT32> visitedBB;
+UINT32 currBB = 0;
+std::set<std::pair<UINT32, UINT32>> visTrace;
 int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
 int runSignal = 0;
+std::vector<std::pair<uintptr_t, uintptr_t>> BBStack;
 } // namespace
 
 using namespace qsym;
@@ -482,17 +484,45 @@ UNSUPPORTED(SymExpr _sym_build_fp_neg(SymExpr))
 // Call-stack tracing
 //
 
+void recordBB(uintptr_t site_id){
+  BBStack.emplace_back(site_id, currBB);
+}
+
+void restoreBB(uintptr_t site_id) {
+  int num_elements_to_remove = 0;
+  for (auto it = BBStack.rbegin(); it != BBStack.rend(); it++) {
+    if (BBStack.back().first == site_id)
+      break;
+    num_elements_to_remove += 1;
+  }
+  for (int i = 0; i < num_elements_to_remove - 1; i++){
+    BBStack.pop_back();
+  }
+
+  // record return edge
+  uintptr_t dstBB = 0;
+  if (!BBStack.empty()){
+    dstBB = BBStack.back().second;
+    BBStack.pop_back();
+  }
+  visTrace.insert(std::make_pair(currBB, dstBB));
+  currBB = dstBB;
+}
+
 void _sym_notify_call(uintptr_t site_id) {
   g_call_stack_manager.visitCall(site_id);
+  recordBB(site_id);
 }
 
 void _sym_notify_ret(uintptr_t site_id) {
   g_call_stack_manager.visitRet(site_id);
+  restoreBB(site_id);
 }
 
-void _sym_notify_basic_block(uintptr_t site_id) {
-  g_call_stack_manager.visitBasicBlock(site_id);
-  visitedBB.insert(site_id);
+void _sym_notify_basic_block(uintptr_t bb_id) {
+  visTrace.insert(std::make_pair(currBB, bb_id));
+  currBB = bb_id;
+  g_call_stack_manager.visitBasicBlock(bb_id);
 }
 
 //
@@ -726,6 +756,13 @@ void _sym_report_path_constraint_sequence() {
       SymbolicExpr *expr = node->mutable_constraint();
       *expr = serializeQsymExpr(constraint);
     }
+  }
+
+  for(const auto &bbTrace: visTrace){
+    uint32_t srcBB = bbTrace.first;
+    uint32_t dstBB = bbTrace.second;
+    cs.add_bbid(srcBB);
+    cs.add_bbid(dstBB);
   }
 
   std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";

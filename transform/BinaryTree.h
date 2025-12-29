@@ -16,13 +16,19 @@
 
 namespace fs = std::filesystem;
 
+enum NodeStatus {
+  UnReachable = 0,
+  WillbeVisit = 1,
+  HasVisited  = 2
+};
+
 template<typename T>
 class Node {
  public:
 
   Node<T> *parent, *left, *right;
   T data;
-  int status = 0;  // -1:unsat, 0:no-visit, 1:visited
+  NodeStatus status = WillbeVisit;  // -1:unsat, 0:no-visit, 1:visited
 
   Node() : parent(NULL), left(NULL), right(NULL) {
     parent = NULL;
@@ -86,6 +92,50 @@ public:
 
   TreeNode *getRoot() { return root; }
 
+  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode, bool branchTaken){
+    currNode->status = HasVisited;
+
+    if (branchTaken) { /// left is the true branch
+      if (currNode->left) {
+        if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
+          // if path is divergent, try to rebuild it !
+          currNode->left = constructTreeNode(currNode, pctNode);
+          std::cerr << "[zgf dbg] left Divergent !!!\n";
+        }
+
+        currNode->left->data.taken = true;
+      } else {
+        currNode->left = constructTreeNode(currNode, pctNode);
+      }
+
+      if (!currNode->right) {
+        currNode->right = constructTreeNode(currNode, pctNode);
+        currNode->right->data.taken = false;
+      }
+      currNode = currNode->left;
+    } else {
+      if (currNode->right) {
+        if (currNode->right->data.constraint->hash() != pctNode.constraint->hash()) {
+          // if path is divergent, try to rebuild it !
+          currNode->right = constructTreeNode(currNode, pctNode);
+          std::cerr << "[zgf dbg] right Divergent !!!\n";
+        }
+
+        currNode->right->data.taken = false;
+      } else {
+        currNode->right = constructTreeNode(currNode, pctNode);
+      }
+
+      if (!currNode->left) {
+        currNode->left = constructTreeNode(currNode, pctNode);
+        currNode->left->data.taken = true;
+      }
+      currNode = currNode->right;
+    }
+    currNode->status = HasVisited;
+    return currNode;
+  }
+
   TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
     return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr);
   }
@@ -100,7 +150,7 @@ public:
     while (!worklist.empty()) {
       TreeNode* node = worklist.front();
       worklist.pop();
-      if (node->status == 0)
+      if (node->status == WillbeVisit)
         result.push_back(node);
 
       if (node->left)  worklist.push(node->left);
@@ -127,7 +177,7 @@ private:
 
   bool isFullyBuilt(const TreeNode* node) {
     if (node->data.isLast ||
-        node->status == -1 ||
+        node->status == UnReachable ||
         fullCache.find(node) != fullCache.end()) {
       fullCache.insert(node);
       return true;
@@ -149,8 +199,8 @@ private:
     std::string indent(depth * 2, ' '); // 2 空格缩进每层
     std::string takenStr = node->data.taken   ? "[T]" : "[F]";
     std::string isFull   = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
-    std::string status   = node->status == 1 ? "[has vis]" :
-                           node->status == 0 ? "[will vis]" : "[un sat]";
+    std::string status   = node->status == HasVisited  ? "[has vis]" :
+                           node->status == WillbeVisit ? "[will vis]" : "[un sat]";
 
     // 假设 qsym::ExprRef 支持 toString()
     std::string constraintStr = node->data.constraint->toString();

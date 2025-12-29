@@ -101,6 +101,7 @@ message SequenceNode {
 
 message ConstraintSequence {
   repeated SequenceNode node = 1;
-  uint32 varBytes  = 2;
-  uint32 runSignal = 3;
+  repeated uint32 BBID = 2;
+  uint32 varBytes  = 3;
+  uint32 runSignal = 4;
 }

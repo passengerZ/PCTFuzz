@@ -524,7 +524,7 @@ public:
     std::ostringstream oss;
     oss << "id:" << std::setw(6)
         << std::setfill('0') << dest.current_id
-        << ",pctree";
+        << "," << dest.path.filename().string() << ",pct";
     std::string new_name = oss.str();
     fs::path target = dest.path / new_name;
 
