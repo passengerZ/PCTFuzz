@@ -495,16 +495,15 @@ void restoreBB(uintptr_t site_id) {
       break;
     num_elements_to_remove += 1;
   }
-  for (int i = 0; i < num_elements_to_remove - 1; i++){
+  for (int i = 0; i < num_elements_to_remove - 1; i++)
     BBStack.pop_back();
-  }
 
-  // record return edge
   uintptr_t dstBB = 0;
   if (!BBStack.empty()){
     dstBB = BBStack.back().second;
     BBStack.pop_back();
   }
+
   visTrace.insert(std::make_pair(currBB, dstBB));
   currBB = dstBB;
 }
@@ -635,8 +634,8 @@ SymbolicExpr serializeQsymExpr(SymExpr expr) {
     unsigned index = ((ReadExpr *) (expr))->index();
     res.set_value(index);
     res.set_name(("v_" + std::to_string(index)));
-    if (index > MaxVarIndex)
-      MaxVarIndex = index;
+    if (index + 1 > MaxVarIndex)
+      MaxVarIndex = index + 1;
     break;
   }
   /* Unary Expression */
@@ -739,7 +738,6 @@ void _sym_handle_exit(int val) {
 
 void _sym_report_path_constraint_sequence() {
   ConstraintSequence cs;
-  cs.set_varbytes(MaxVarIndex);
   cs.set_runsignal(runSignal);
 
   for(const auto &e : branchConstaints) {
@@ -757,6 +755,7 @@ void _sym_report_path_constraint_sequence() {
       *expr = serializeQsymExpr(constraint);
     }
   }
+  cs.set_varbytes(MaxVarIndex);
 
   for(const auto &bbTrace: visTrace){
     uint32_t srcBB = bbTrace.first;

@@ -55,16 +55,17 @@ static constexpr char kSymCtorName[] = "__sym_ctor";
 
 std::map<uint64_t,uint32_t> globalBBIDMap;
 std::map<uint32_t,std::set<uint32_t>> globalBBIDTraceMap;
+uint32_t rootBB = 0;
 
-void genCFGJsonFile(std::string CFGFile) {
+void genCFGJsonFile(const std::string& CFGFile) {
   // 顶层对象：picojson::value (object type)
   picojson::object topObj;
+
+  topObj["ROOT"] = picojson::value(static_cast<double>(rootBB));;
 
   // 1. 构建 BBInfo 数组
   picojson::array bbInfoArray;
   for (const auto& kv : globalBBIDMap) {
-    // kv.second 是 uint32_t 或 int64_t，picojson 支持 double/bool/string/null
-    // 对于整数，可直接转为 double（JSON 无整型，但数值相同）
     bbInfoArray.push_back(picojson::value(static_cast<double>(kv.second)));
   }
   topObj["BBInfo"] = picojson::value(bbInfoArray);
@@ -110,6 +111,8 @@ void constructICFG(Module &M){
       visitedFunc.insert(&F);
       uint32_t BBID = globalBBIDMap.size() + 1;
       globalBBIDMap[reinterpret_cast<uint64_t>(&BB)] = BBID;
+      if (rootBB == 0 && F.getFunction().getName() == "main")
+        rootBB = BBID;
     }
   }
 
@@ -315,7 +318,7 @@ bool instrumentFunction(Function &F) {
   symbolizer.shortCircuitExpressionUses();
 
   // DEBUG(errs() << F << '\n');
-  F.print(llvm::errs());
+  // F.print(llvm::errs());
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
 

@@ -61,15 +61,12 @@ struct PCTreeNode {
   PCTreeNode() : constraint(nullptr), taken(false) {}
 
   PCTreeNode(qsym::ExprRef expr, fs::path input_file,
-             bool taken, bool isLast,
-             uint32_t currBB, uint32_t leftBB, uint32_t rightBB)
+             bool taken, uint32_t currBB, uint32_t leftBB, uint32_t rightBB)
       : constraint(std::move(expr)), input_file(input_file),
-        taken(taken), isLast(isLast),
-        currBB(currBB), leftBB(leftBB), rightBB(rightBB){}
+        taken(taken), currBB(currBB), leftBB(leftBB), rightBB(rightBB){}
   qsym::ExprRef constraint;
   fs::path input_file;
   bool taken  = false;
-  bool isLast = false;
 
   // Record basic block successor
   uint32_t currBB = -1;
@@ -92,10 +89,10 @@ public:
 
   TreeNode *getRoot() { return root; }
 
-  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode, bool branchTaken){
+  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode){
     currNode->status = HasVisited;
 
-    if (branchTaken) { /// left is the true branch
+    if (pctNode.taken) { /// left is the true branch
       if (currNode->left) {
         if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
           // if path is divergent, try to rebuild it !
@@ -137,7 +134,9 @@ public:
   }
 
   TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
-    return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr);
+    TreeNode *newNode = new Node<PCTNode>(std::move(n), parent, nullptr, nullptr);
+    BBToNode[newNode->data.currBB].insert(newNode);
+    return newNode;
   }
 
   std::vector<TreeNode *> getToBeExploredNodes() {
@@ -174,13 +173,18 @@ public:
 private:
   TreeNode *root;
   std::set<const TreeNode*> fullCache;
+  std::map<uint32_t, std::set<const TreeNode*>> BBToNode;
 
   bool isFullyBuilt(const TreeNode* node) {
-    if (node->data.isLast ||
-        node->status == UnReachable ||
+    if (node->status == UnReachable ||
         fullCache.find(node) != fullCache.end()) {
       fullCache.insert(node);
       return true;
+    }
+    else if (!node->left && !node->right) {
+      if (node->status == HasVisited)
+        return true; // is terminal PC
+      return false;
     }
     else if (!node->left || !node->right) {
       return false;
@@ -192,9 +196,8 @@ private:
   }
 
   void printNodeWithIndent(const TreeNode* node, int depth) {
-    if (!node->data.constraint) {
+    if (!node->data.constraint)
       return;
-    }
 
     std::string indent(depth * 2, ' '); // 2 空格缩进每层
     std::string takenStr = node->data.taken   ? "[T]" : "[F]";
@@ -202,15 +205,13 @@ private:
     std::string status   = node->status == HasVisited  ? "[has vis]" :
                            node->status == WillbeVisit ? "[will vis]" : "[un sat]";
 
-    // 假设 qsym::ExprRef 支持 toString()
     std::string constraintStr = node->data.constraint->toString();
-
     std::cout << indent << takenStr << " " << isFull
               << " " << status << " " << constraintStr;
 
-    // 可选：打印基本块信息
+    // 打印基本块信息
     std::cout << "  (BB:" << node->data.currBB
-              << " -> " << (node->data.taken ? node->data.rightBB : node->data.leftBB)
+              << " -> " << (node->data.taken ? node->data.leftBB : node->data.rightBB)
               << ")";
     std::cout << '\n';
   }

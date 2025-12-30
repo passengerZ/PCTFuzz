@@ -12,7 +12,7 @@
 #include "call_stack_manager.h"
 #include "qsymExpr.pb.h"
 #include "solver.h"
-#include "picojson.h"
+#include "SearchStrategy.h"
 
 #include "llvm/Support/CommandLine.h"
 
@@ -54,10 +54,7 @@ z3::context *g_z3_context;
 
 std::map<UINT32, ExprRef> cached;
 ExecutionTree *executionTree;
-
-std::set<uint32_t> BBIDSet;
-std::set<std::pair<uint32_t, uint32_t>> Trace, visTrace;
-std::map<uint32_t,std::set<uint32_t>> ICFG;
+SearchStrategy *search;
 
 template <typename E> constexpr auto to_underlying(E e) noexcept {
   return static_cast<std::underlying_type_t<E>>(e);
@@ -228,16 +225,17 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
   ConstraintSequence cs;
   cs.ParseFromIstream(&inputf);
 
-  if (executionTree->varSizeLowerBound == 0)
-    executionTree->varSizeLowerBound = cs.varbytes();
-
   // if current varByte less than initial,
   // may cause path constraint tree Divergent
+  if (executionTree->varSizeLowerBound == 0 ||
+      cs.varbytes() >= executionTree->varSizeLowerBound)
+    executionTree->varSizeLowerBound = cs.varbytes();
   if (cs.varbytes() < executionTree->varSizeLowerBound)
     return false;
+  std::cerr << "[zgf dbg] Var Size : " << executionTree->varSizeLowerBound << "\n";
 
-  // (1) covnew -> interst = 1;
-  // (2) signal > 0 -> crash = 2;
+  // (1) covnew ----> interst = 1;
+  // (2) signal > 0 ----> crash = 2;
   unsigned isInterest = 0;
   //std::cerr << "[PCT] visTrace : ";
   for (int i = 0; i < cs.bbid_size(); i+=2) {
@@ -246,13 +244,11 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     const uint32_t dstBB = cs.bbid(i+1);
     //std::cerr << " " << srcBB << "->" << dstBB << ",";
 
-    std::pair<uint32_t, uint32_t> trace = std::make_pair(srcBB,dstBB);
-    auto result = visTrace.insert(trace);
+    trace covTrace = std::make_pair(srcBB,dstBB);
+    bool isCovNew = search->updateCovTrace(covTrace);
     // insert success, means new trace have been visited
-    if (result.second){
+    if (isCovNew){
       isInterest = 1;
-      // update ICFG
-      ICFG[srcBB].insert(dstBB);
     }
   }
   if (cs.runsignal() != 0)
@@ -266,88 +262,15 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     if (!pnode.has_constraint())
       continue;
 
-    bool isLastPC = (i == cs.node_size() - 1);
     bool branchTaken = pnode.taken() > 0;
-
     deserializeToQsymExpr(pnode.constraint(), pathCons);
-    PCTNode pctNode(pathCons, input, branchTaken, isLastPC,
+    PCTNode pctNode(pathCons, input, branchTaken,
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
-    currNode = executionTree->updateTree(currNode, pctNode, branchTaken);
+    currNode = executionTree->updateTree(currNode, pctNode);
   }
 
   return isInterest;
-}
-
-void getCFGFromJson(const std::string& cfgFile) {
-  std::ifstream file(cfgFile);
-  if (!file.is_open()) {
-    throw std::runtime_error("Failed to open JSON file: " + cfgFile);
-  }
-  std::stringstream buffer;
-  buffer << file.rdbuf();
-  std::string jsonStr = buffer.str();
-  file.close();
-
-  picojson::value v;
-  std::string err = picojson::parse(v, jsonStr);
-  if (!err.empty())
-    throw std::runtime_error("JSON parse error: " + err);
-  if (!v.is<picojson::object>())
-    throw std::runtime_error("Root JSON element is not an object");
-
-  const picojson::object& root = v.get<picojson::object>();
-
-  std::cerr << "[PCT] BBInfo : ";
-  auto bbInfoIt = root.find("BBInfo");
-  if (bbInfoIt != root.end() && bbInfoIt->second.is<picojson::array>()) {
-    const picojson::array& bbArray = bbInfoIt->second.get<picojson::array>();
-    for (const auto& elem : bbArray) {
-      if (elem.is<double>()) {
-        // picojson 用 double 存数字，但值是整数
-        double val = elem.get<double>();
-        if (val >= 0 && val <= static_cast<double>(UINT32_MAX)) {
-          BBIDSet.insert(static_cast<uint32_t>(val));
-          std::cerr << " " << (int)val;
-        }
-      }
-    }
-  }
-
-  std::cerr << "\n[PCT] TRInfo : ";
-  auto trInfoIt = root.find("TRInfo");
-  if (trInfoIt != root.end() && trInfoIt->second.is<picojson::object>()) {
-    const picojson::object& trObj = trInfoIt->second.get<picojson::object>();
-    for (const auto& kv : trObj) {
-      const std::string& srcStr     = kv.first;
-      const picojson::value& dstVal = kv.second;
-
-      uint32_t srcID;
-      try {
-        srcID = static_cast<uint32_t>(std::stoul(srcStr));
-      } catch (...) {
-        continue;
-      }
-
-      std::set<uint32_t> dstSet;
-      if (dstVal.is<picojson::array>()) {
-        const picojson::array& dstArray = dstVal.get<picojson::array>();
-        for (const auto& dstElem : dstArray) {
-          if (dstElem.is<double>()) {
-            double d = dstElem.get<double>();
-            if (d >= 0 && d <= static_cast<double>(UINT32_MAX)) {
-              uint32_t dstID = static_cast<uint32_t>(d);
-              dstSet.insert(dstID);
-              Trace.insert(std::make_pair(srcID, dstID));
-              std::cerr << " " << (int)srcID << "->" << dstID << ",";
-            }
-          }
-        }
-      }
-      ICFG[srcID] = dstSet;
-    }
-  }
-  std::cerr << "\n";
 }
 
 std::set<std::string> getInputsFromPCT(){
@@ -412,14 +335,6 @@ int main (int argc, char* argv[]){
     return 1;
   }
 
-  auto *CFGFile = getenv("PCT_CFG_PATH");
-  if (CFGFile == nullptr){
-    llvm::errs() << "[PCT] Not set PCT_CFG_PATH, do not generate CFG!\n";
-  }else{
-    llvm::errs() << "[PCT] fetch CFG in PCT_CFG_PATH : " << CFGFile << "\n";
-    getCFGFromJson(CFGFile);
-  }
-
   std::vector<std::string> command;
   command.push_back(SymCCTargetBin);
   command.push_back("@@");
@@ -433,6 +348,7 @@ int main (int argc, char* argv[]){
   qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, ""); // for QSYM-internal use
   qsym::g_expr_builder = qsym::SymbolicExprBuilder::create();
   qsym::executionTree = new ExecutionTree();
+  qsym::search = new SearchStrategy();
 
   while (true) {
     // 1. fetch all covnew seed, but not execute before
@@ -456,23 +372,27 @@ int main (int argc, char* argv[]){
         remove_file(pct_file);
       }
 
+      // step(3) : select uncovered traces
+      std::map<trace, std::set<trace>> ReachEdgeBranches =
+          qsym::search->recomputeGuidance();
+
       // step(3) : invoke solver to generate multiple inputs
       std::set<std::string> newInputs = getInputsFromPCT();
 
       // step(4) : execute the inputs from PCT, decide which cov-new
-      while (!newInputs.empty()){
-        for (const auto& input : newInputs){
-          fs::path pct_file = state.concolic_execution(input, symcc, afl_config);
-          unsigned inputStatus = qsym::updatePCTree(pct_file, input);
-          remove_file(pct_file);
-
-          if (inputStatus > 0)
-            state.copy_testcase_to_fuzzer(
-                input, inputStatus == 1 ? state.queue : state.crashes);
-        }
-        // re-generate seeds, utils no-covnew
-        newInputs = getInputsFromPCT();
-      }
+//      while (!newInputs.empty()){
+//        for (const auto& input : newInputs){
+//          fs::path pct_file = state.concolic_execution(input, symcc, afl_config);
+//          unsigned inputStatus = qsym::updatePCTree(pct_file, input);
+//          remove_file(pct_file);
+//
+//          if (inputStatus > 0)
+//            state.copy_testcase_to_fuzzer(
+//                input, inputStatus == 1 ? state.queue : state.crashes);
+//        }
+//        // re-generate seeds, utils no-covnew
+//        newInputs = getInputsFromPCT();
+//      }
     }
 
     executionTree->printTree(true);
