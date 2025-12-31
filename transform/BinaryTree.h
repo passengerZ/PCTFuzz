@@ -13,8 +13,11 @@
 #include <utility>
 
 #include "expr.h"
+#include "expr_builder.h"
+#include "solver.h"
 
 namespace fs = std::filesystem;
+typedef std::pair<uint32_t, uint32_t> trace;
 
 enum NodeStatus {
   UnReachable = 0,
@@ -28,7 +31,9 @@ class Node {
 
   Node<T> *parent, *left, *right;
   T data;
+
   NodeStatus status = WillbeVisit;  // -1:unsat, 0:no-visit, 1:visited
+  uint32_t depth = 0;
 
   Node() : parent(NULL), left(NULL), right(NULL) {
     parent = NULL;
@@ -36,10 +41,9 @@ class Node {
     right = NULL;
   }
 
-  Node(T data) : parent(NULL), left(NULL), right(NULL), data(data) {}
-
   Node(T data, Node<T> *parent, Node<T> *left, Node<T> *right) :
       parent(parent), left(left), right(right), data(data) {
+    depth = parent->depth + 1;
   }
 
   static void walk(const Node<T> *tree);
@@ -81,7 +85,8 @@ class ExecutionTree {
 public:
   unsigned varSizeLowerBound = 0;
 
-  ExecutionTree() {
+  ExecutionTree(qsym::Solver *solver, qsym::ExprBuilder *expr_builder) :
+    g_solver(solver), g_expr_builder(expr_builder) {
     root = new TreeNode();
   }
 
@@ -162,6 +167,74 @@ public:
     return static_cast<int>(getToBeExploredNodes().size());
   }
 
+  trace getTrace(const TreeNode* node){
+    uint32_t dst = node->data.taken ? node->data.leftBB : node->data.rightBB;
+    return std::make_pair(node->data.currBB, dst);
+  }
+
+  std::set<TreeNode*> getBBNodes(trace targetTrace){
+    std::set<TreeNode*> willVisitBB;
+    for (auto node : BBToNode[targetTrace.first]){
+      trace tobeTrace = getTrace(node);
+      if (tobeTrace == targetTrace && node->status == WillbeVisit)
+        willVisitBB.insert(node);
+    }
+    return willVisitBB;
+  }
+
+  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode){
+    std::vector<qsym::ExprRef> constraints;
+    auto currNode = srcNode;
+    while (currNode != getRoot()) {
+      qsym::ExprRef expr = currNode->data.constraint;
+      if (!currNode->data.taken)
+        expr = g_expr_builder->createLNot(expr);
+      constraints.push_back(expr);
+      currNode = currNode->parent;
+    }
+    return constraints;
+  }
+
+  std::vector<qsym::ExprRef> getRelaConstraints(
+      const TreeNode *srcNode, std::set<trace> *relaBranchTraces){
+    std::vector<qsym::ExprRef> constraints;
+    auto currNode = srcNode;
+    while (currNode != getRoot()) {
+      trace tobeTrace = getTrace(currNode);
+      if (relaBranchTraces->count(tobeTrace)){
+        qsym::ExprRef expr = currNode->data.constraint;
+        if (!currNode->data.taken)
+          expr = g_expr_builder->createLNot(expr);
+        constraints.push_back(expr);
+      }
+      currNode = currNode->parent;
+    }
+    return constraints;
+  }
+
+  std::string generateTestCase(TreeNode *node){
+    fs::path input_file = node->data.input_file;
+    assert(node->status == WillbeVisit);
+
+    std::vector<qsym::ExprRef> constraints = getConstraints(node);
+
+    g_solver->reset();
+    g_solver->setInputFile(input_file);
+    for (const auto& cond : constraints)
+      g_solver->add(cond->toZ3Expr());
+
+    std::string new_case = g_solver->fetchTestcase();
+
+    // No Solution, set the node status to UNSAT
+    // SAT, record the testcase
+    if (new_case.empty())
+      node->status = UnReachable;
+    else
+      node->status = HasVisited;
+
+    return new_case;
+  }
+
   void printTree(bool isFullPrint = false) {
     if (!root) {
       std::cout << "(null root)\n";
@@ -171,9 +244,12 @@ public:
   }
 
 private:
+  qsym::Solver *g_solver;
+  qsym::ExprBuilder *g_expr_builder;
+
   TreeNode *root;
   std::set<const TreeNode*> fullCache;
-  std::map<uint32_t, std::set<const TreeNode*>> BBToNode;
+  std::map<uint32_t, std::set<TreeNode*>> BBToNode;
 
   bool isFullyBuilt(const TreeNode* node) {
     if (node->status == UnReachable ||

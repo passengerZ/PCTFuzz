@@ -232,7 +232,6 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     executionTree->varSizeLowerBound = cs.varbytes();
   if (cs.varbytes() < executionTree->varSizeLowerBound)
     return false;
-  std::cerr << "[zgf dbg] Var Size : " << executionTree->varSizeLowerBound << "\n";
 
   // (1) covnew ----> interst = 1;
   // (2) signal > 0 ----> crash = 2;
@@ -273,39 +272,29 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
   return isInterest;
 }
 
-std::set<std::string> getInputsFromPCT(){
-  std::set<std::string> newInputs;
-  std::vector<TreeNode *> tobeExplores = executionTree->getToBeExploredNodes();
-  for (auto node : tobeExplores){
-    fs::path input_file = node->data.input_file;
-    assert(node->status == WillbeVisit);
+void execute_one(const std::string& input,
+                 State *state, SymCC *symcc, AflConfig* afl_config){
+  fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
+  unsigned inputStatus = qsym::updatePCTree(pct_file, input);
+  remove_file(pct_file);
 
-    std::vector<PCTNode> constraints;
-    auto currNode = node;
-    while (currNode != executionTree->getRoot()) {
-      constraints.push_back(currNode->data);
-      currNode = currNode->parent;
-    }
-
-    g_solver->reset();
-    g_solver->setInputFile(input_file);
-    for (const auto& cons : constraints){
-      ExprRef expr = cons.constraint;
-      if (!cons.taken)
-        expr = g_expr_builder->createLNot(expr);
-      g_solver->add(expr->toZ3Expr());
-    }
-
-    std::string new_case = g_solver->fetchTestcase();
-    // No Solution, set the node status to UNSAT
-    // SAT, record the testcase
-    if (new_case.empty()){
-      node->status = UnReachable;
-    }else{
-      newInputs.insert(new_case);
-    }
+  // save important input
+  if (state->processed_seeds.count(input) == 0 && inputStatus > 0){
+    fs::path fuzzInput = state->copy_testcase_to_fuzzer(
+        input, inputStatus == 1 ? state->queue : state->crashes);
+    state->processed_seeds.insert(fuzzInput);
   }
-  return newInputs;
+}
+
+void executePCT(std::vector<TreeNode *> *tobeExplores,
+                State *state, SymCC *symcc, AflConfig* afl_config){
+  for (auto node : *tobeExplores){
+    std::string new_case = executionTree->generateTestCase(node);
+    if (new_case.empty())
+      continue;
+    execute_one(new_case, state, symcc, afl_config);
+    std::cerr << "[zgf dbg] pct execute : " << new_case << "\n";
+  }
 }
 
 } // namespace qsym
@@ -347,7 +336,7 @@ int main (int argc, char* argv[]){
   qsym::g_z3_context = new z3::context{};
   qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, ""); // for QSYM-internal use
   qsym::g_expr_builder = qsym::SymbolicExprBuilder::create();
-  qsym::executionTree = new ExecutionTree();
+  qsym::executionTree = new ExecutionTree(g_solver, g_expr_builder);
   qsym::search = new SearchStrategy();
 
   while (true) {
@@ -366,38 +355,48 @@ int main (int argc, char* argv[]){
       std::this_thread::sleep_for(10s);
     }else{
       // step(2) : execute inputs from afl, and rebuild PCT
-      for (const auto& input : covnew_seeds){
-        fs::path pct_file = state.concolic_execution(input, symcc, afl_config);
-        qsym::updatePCTree(pct_file, input);
-        remove_file(pct_file);
-      }
+      for (const auto& input : covnew_seeds)
+        execute_one(input, &state, &symcc, &afl_config);
+
+      std::cerr << "[zgf dbg] execution tree after fuzz : " << executionTree->getLeftNodeSize() << "\n";
+      executionTree->printTree(true);
 
       // step(3) : select uncovered traces
       std::map<trace, std::set<trace>> ReachEdgeBranches =
           qsym::search->recomputeGuidance();
 
-      // step(3) : invoke solver to generate multiple inputs
-      std::set<std::string> newInputs = getInputsFromPCT();
+      for (auto guideIt : ReachEdgeBranches){
+        trace t = guideIt.first;
+        std::set<trace> *relaBranchTraces = &guideIt.second;
+        std::set<TreeNode*> leafNodes = executionTree->getBBNodes(t);
+        for (auto leafNode : leafNodes){
+          if (leafNode->depth < 3){
+
+            std::string input = executionTree->generateTestCase(leafNode);
+            if (!input.empty())
+              qsym::execute_one(input, &state, &symcc, &afl_config);
+
+            continue;
+          }
+
+          std::vector<qsym::ExprRef> relaCons =
+              executionTree->getRelaConstraints(leafNode, relaBranchTraces);
+          std::cerr << t.first << "->" << t.second << ", taken: " << leafNode->data.taken << "\n";
+          for (auto e : relaCons)
+            std::cerr << "e : " << e->toString() << "\n";
+        }
+      }
 
       // step(4) : execute the inputs from PCT, decide which cov-new
-//      while (!newInputs.empty()){
-//        for (const auto& input : newInputs){
-//          fs::path pct_file = state.concolic_execution(input, symcc, afl_config);
-//          unsigned inputStatus = qsym::updatePCTree(pct_file, input);
-//          remove_file(pct_file);
-//
-//          if (inputStatus > 0)
-//            state.copy_testcase_to_fuzzer(
-//                input, inputStatus == 1 ? state.queue : state.crashes);
-//        }
-//        // re-generate seeds, utils no-covnew
-//        newInputs = getInputsFromPCT();
-//      }
+      std::vector<TreeNode *> tobeExplore = executionTree->getToBeExploredNodes();
+      while(!tobeExplore.empty()){
+        executePCT(&tobeExplore, &state, &symcc, &afl_config);
+        tobeExplore = executionTree->getToBeExploredNodes();
+        std::cerr << "[zgf dbg] execution tree after DSE : " << tobeExplore.size() << "\n";
+        executionTree->printTree(true);
+        std::cerr << "========\n";
+      }
     }
-
-    executionTree->printTree(true);
-
-    // compute Uncovered BB as Source
 
     auto now = std::chrono::steady_clock::now();
     if (now - state.last_stats_output > STATS_INTERVAL_SEC) {

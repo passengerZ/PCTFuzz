@@ -363,7 +363,7 @@ void Solver::saveValues(const std::string& postfix) {
 }
 
 std::string Solver::fetchTestcase() {
-  std::string fname = "";
+  std::string fname;
   if (check() != z3::sat) {
     LOG_DEBUG("unsat\n");
     return fname;

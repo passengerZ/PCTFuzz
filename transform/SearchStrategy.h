@@ -146,12 +146,13 @@ public:
         std::set<trace>>>
         edges(ReachEdgeBranches.begin(), ReachEdgeBranches.end());
 
+    // 按 critical trace 大小升序排列：小的（更浅的）优先保留
     std::sort(edges.begin(), edges.end(),
               [](const auto& a, const auto& b) {
-                return a.second.size() > b.second.size();
+                return a.second.size() < b.second.size(); // 小集合在前
               });
 
-    std::set<trace> toErase;
+    std::set<std::pair<uint32_t, uint32_t>> toErase;
 
     for (size_t i = 0; i < edges.size(); ++i) {
       const auto& [edge_i, trace_i] = edges[i];
@@ -161,17 +162,18 @@ public:
         const auto& [edge_j, trace_j] = edges[j];
         if (toErase.count(edge_j)) continue;
 
-        // 如果 trace_j 是 trace_i 的子集，则 edge_j 冗余
-        if (trace_j.size() <= trace_i.size()) {
+        // 如果 trace_i 是 trace_j 的子集，则 edge_j 是更深的边，可删除
+        if (trace_i.size() <= trace_j.size()) {
           bool isSubset = true;
-          for (const auto& trans : trace_j) {
-            if (trace_i.find(trans) == trace_i.end()) {
+          for (const auto& trans : trace_i) {
+            if (trace_j.find(trans) == trace_j.end()) {
               isSubset = false;
               break;
             }
           }
-          if (isSubset)
+          if (isSubset) {
             toErase.insert(edge_j);
+          }
         }
       }
     }

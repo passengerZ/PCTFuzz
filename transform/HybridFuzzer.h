@@ -519,7 +519,7 @@ public:
     return result.constraint_file;
   }
 
-  void copy_testcase_to_fuzzer(const fs::path& src, TestcaseDir& dest) {
+  fs::path copy_testcase_to_fuzzer(const fs::path& src, TestcaseDir& dest) {
     // 格式化新文件名：id:{:06},src:{}
     std::ostringstream oss;
     oss << "id:" << std::setw(6)
@@ -537,6 +537,7 @@ public:
     }
 
     dest.current_id++;
+    return target;
   }
 
   TestcaseResult evaluate_new_testcase(const fs::path& testcase,
