@@ -118,6 +118,7 @@ template <typename T> Node<T> *Node<T>::deleteNode(Node<T> *tree, Node<T> *node)
     return tree;
 }
 
+
 template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node);
 
 template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node) {
@@ -127,4 +128,214 @@ template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node
     if (node.right) output << " Right: " << node.right -> data;
     output << "\n";
     return output;
+}
+
+/////////////////////
+
+bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
+  if (node->status == UnReachable ||
+      fullCache.find(node) != fullCache.end()) {
+    fullCache.insert(node);
+    return true;
+  }
+  else if (node->isLeaf()) {
+    if (node->status == HasVisited)
+      return true; // is terminal PC
+    return false;
+  }
+  else if (!node->left || !node->right) {
+    return false;
+  }
+  bool isFull = isFullyBuilt(node->left) && isFullyBuilt((node->right));
+  if (isFull)
+    fullCache.insert(node);
+  return isFull;
+}
+
+void ExecutionTree::printTree(bool isFullPrint) {
+  if (!root) {
+    std::cerr << "(null root)\n";
+    return;
+  }
+  printTree(root, 0, isFullPrint);
+}
+
+void ExecutionTree::printNodeWithIndent(const TreeNode* node, int depth) {
+  if (!node->data.constraint)
+    return;
+
+  std::string indent(depth * 2, '-');
+  std::string takenStr = node->data.taken   ? "[T]" : "[F]";
+  std::string isFull   = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
+  std::string status   = node->status == HasVisited  ? "[has vis]" :
+                         node->status == WillbeVisit ? "[will vis]" : "[un sat]";
+
+  std::string constraintStr = node->data.constraint->toString();
+  std::cerr << indent << takenStr << " " << isFull
+            << " " << status << " " << constraintStr;
+
+  // 打印基本块信息
+  std::cerr << "  (BB:" << node->data.currBB
+            << " -> " << (node->data.taken ? node->data.leftBB : node->data.rightBB)
+            << ")";
+  std::cerr << '\n';
+}
+
+void ExecutionTree::printTree(const TreeNode* node, int depth, bool isFullPrint) {
+  if (!node) return;
+
+  // 先处理左子树（taken = false）
+  if (node->left) {
+    printNodeWithIndent(node->left, depth);
+    if (isFullPrint || !isFullyBuilt(node->left))
+      printTree(node->left, depth + 1, isFullPrint);
+  }
+
+  // 再处理右子树（taken = true）
+  if (node->right) {
+    printNodeWithIndent(node->right, depth);
+    if (isFullPrint || !isFullyBuilt(node->right))
+      printTree(node->right, depth + 1, isFullPrint);
+  }
+}
+
+////////////////////////
+
+TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
+  currNode->status = HasVisited;
+
+  if (pctNode.taken) { /// left is the true branch
+    if (currNode->left) {
+      if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
+        // if path is divergent, try to rebuild it !
+        currNode->left = constructTreeNode(currNode, pctNode);
+        std::cerr << "[zgf dbg] left Divergent !!!\n";
+      }
+
+      currNode->left->data.taken = true;
+    } else {
+      currNode->left = constructTreeNode(currNode, pctNode);
+    }
+
+    if (!currNode->right) {
+      currNode->right = constructTreeNode(currNode, pctNode);
+      currNode->right->data.taken = false;
+    }
+    currNode = currNode->left;
+  } else {
+    if (currNode->right) {
+      if (currNode->right->data.constraint->hash() != pctNode.constraint->hash()) {
+        // if path is divergent, try to rebuild it !
+        currNode->right = constructTreeNode(currNode, pctNode);
+        std::cerr << "[zgf dbg] right Divergent !!!\n";
+      }
+
+      currNode->right->data.taken = false;
+    } else {
+      currNode->right = constructTreeNode(currNode, pctNode);
+    }
+
+    if (!currNode->left) {
+      currNode->left = constructTreeNode(currNode, pctNode);
+      currNode->left->data.taken = true;
+    }
+    currNode = currNode->right;
+  }
+  currNode->status = HasVisited;
+  return currNode;
+}
+
+std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() const {
+  std::vector<TreeNode*> result;
+  if (!root) return result;
+
+  std::queue<TreeNode*> worklist;
+  worklist.push(root);
+
+  while (!worklist.empty()) {
+    TreeNode* node = worklist.front();
+    worklist.pop();
+    if (node->status == WillbeVisit)
+      result.push_back(node);
+
+    if (node->left)  worklist.push(node->left);
+    if (node->right) worklist.push(node->right);
+  }
+  return result;
+}
+
+std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(
+    unsigned int depth) const {
+  std::vector<TreeNode*> result;
+  if (!root) return result;
+
+  std::queue<TreeNode*> worklist;
+  worklist.push(root);
+
+  while (!worklist.empty()) {
+    TreeNode* node = worklist.front();
+    worklist.pop();
+    if (node->status == HasVisited &&
+        node->depth < depth &&
+        node->isLeaf() )
+      result.push_back(node);
+
+    if (node->left)  worklist.push(node->left);
+    if (node->right) worklist.push(node->right);
+  }
+
+  return result;
+}
+
+std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode){
+  std::vector<qsym::ExprRef> constraints;
+  auto currNode = srcNode;
+  while (currNode != getRoot()) {
+    qsym::ExprRef expr = currNode->data.constraint;
+    if (!currNode->data.taken)
+      expr = g_expr_builder->createLNot(expr);
+    constraints.push_back(expr);
+    currNode = currNode->parent;
+  }
+  return constraints;
+}
+
+std::vector<qsym::ExprRef> ExecutionTree::getRelaConstraints(
+    const TreeNode *srcNode, std::set<trace> *relaBranchTraces){
+  std::vector<qsym::ExprRef> constraints;
+  auto currNode = srcNode;
+  while (currNode != getRoot()) {
+    trace tobeTrace = getTrace(currNode);
+    if (relaBranchTraces->count(tobeTrace)){
+      qsym::ExprRef expr = currNode->data.constraint;
+      if (!currNode->data.taken)
+        expr = g_expr_builder->createLNot(expr);
+      constraints.push_back(expr);
+    }
+    currNode = currNode->parent;
+  }
+  return constraints;
+}
+
+std::string ExecutionTree::generateTestCase(TreeNode *node){
+  fs::path input_file = node->data.input_file;
+  assert(node->status == WillbeVisit);
+
+  std::vector<qsym::ExprRef> constraints = getConstraints(node);
+
+  g_solver->reset();
+  g_solver->setInputFile(input_file);
+  for (const auto& cond : constraints)
+    g_solver->add(cond->toZ3Expr());
+
+  std::string new_case = g_solver->fetchTestcase();
+
+  // No Solution, set the node status to UNSAT
+  // SAT, record the testcase
+  if (new_case.empty())
+    node->status = UnReachable;
+  else
+    node->status = HasVisited;
+
+  return new_case;
 }

@@ -6,18 +6,9 @@
 
 #include "CXXProgram.h"
 #include "ExprASTVisitor.h"
+#include "BinaryTree.h"
 
 namespace PCT {
-
-class Variable {
-public :
-  Variable(ExprRef read, uint32_t startBit, uint32_t endBit)
-      : readExpr(std::move(read)), startBit(startBit), endBit(endBit) {};
-
-  ExprRef readExpr;
-  std::string name;
-  uint32_t startBit, endBit;
-};
 
 class TransformPass : public ExprASTVisitor {
 public:
@@ -25,10 +16,10 @@ public:
 
   void extractVariables(const std::vector<ExprRef> &constraints);
   void build(const std::vector<ExprRef> &constraints);
+  void buildFailedPass(const ExecutionTree *executionTree, unsigned depth);
 
   std::shared_ptr<CXXProgram> program;
   uint64_t bufferWidthInBytes  = 0;
-  std::map<const ExprRef, Variable> variables;
   std::set<ExprRef> allVarRead;
 
 private:
@@ -37,7 +28,6 @@ private:
 
   uint64_t counter = 0;
   std::map<ExprRef, std::string> exprToSymbolName; // References strings in `usedSymbols`.
-
   std::unordered_set<std::string> usedSymbols;
   llvm::StringRef entryPointFirstArgName;
   llvm::StringRef entryPointSecondArgName;
@@ -86,12 +76,9 @@ private:
   CXXFunctionDeclRef buildEntryPoint();
   void insertHeaderIncludes();
   void insertBufferSizeGuard(CXXCodeBlockRef cb);
-  void insertNumConstraintsSatisifedCounterInit(CXXCodeBlockRef cb);
 
-  void insertFreeVariableConstruction(CXXCodeBlockRef cb);
   void insertBranchForConstraint(ExprRef constraint);
   void insertFuzzingTarget(CXXCodeBlockRef cb);
-  void insertLibFuzzerCustomCounterInc(CXXCodeBlockRef cb);
 
   // Visitor and ConstantAssignment helper methods
   std::string getBoolConstantStr(ExprRef e) const;

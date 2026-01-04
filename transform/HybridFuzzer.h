@@ -425,7 +425,7 @@ public:
       killed = true;
     }
 
-//    std::cerr << "[zgf dbg] symcc stderr : " << stderr_output << "\n";
+    //std::cerr << "[zgf dbg] symcc output : " << stderr_output << "\n";
 
     fs::path constriant_path = output_dir / "000001.pct";
     auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(total_time);

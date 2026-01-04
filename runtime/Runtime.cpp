@@ -766,7 +766,7 @@ void _sym_report_path_constraint_sequence() {
 
   std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);
-  LOG_INFO("New path constraint tree: " + fname + "\n");
+  //LOG_INFO("New path constraint tree: " + fname + "\n");
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");
 

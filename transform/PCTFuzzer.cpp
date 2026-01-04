@@ -230,6 +230,7 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
   if (executionTree->varSizeLowerBound == 0 ||
       cs.varbytes() >= executionTree->varSizeLowerBound)
     executionTree->varSizeLowerBound = cs.varbytes();
+
   if (cs.varbytes() < executionTree->varSizeLowerBound)
     return false;
 
@@ -263,7 +264,7 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
 
     bool branchTaken = pnode.taken() > 0;
     deserializeToQsymExpr(pnode.constraint(), pathCons);
-    PCTNode pctNode(pathCons, input, branchTaken,
+    PCTNode pctNode(pathCons, input, branchTaken, cs.varbytes(),
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
     currNode = executionTree->updateTree(currNode, pctNode);
@@ -279,9 +280,10 @@ void execute_one(const std::string& input,
   remove_file(pct_file);
 
   // save important input
-  if (state->processed_seeds.count(input) == 0 && inputStatus > 0){
+  if (inputStatus > 0){
     fs::path fuzzInput = state->copy_testcase_to_fuzzer(
         input, inputStatus == 1 ? state->queue : state->crashes);
+    std::cerr << "[PCT] new important input : " << fuzzInput.string() << "\n";
     state->processed_seeds.insert(fuzzInput);
   }
 }
@@ -293,7 +295,6 @@ void executePCT(std::vector<TreeNode *> *tobeExplores,
     if (new_case.empty())
       continue;
     execute_one(new_case, state, symcc, afl_config);
-    std::cerr << "[zgf dbg] pct execute : " << new_case << "\n";
   }
 }
 
@@ -351,50 +352,57 @@ int main (int argc, char* argv[]){
     std::vector<fs::path> covnew_seeds =
         afl_config.get_unseen_seeds(afl_config.queue, state.processed_seeds);
     if (covnew_seeds.empty()){
-      std::cout << "Waiting for new test cases...\n";
+      std::cerr << "[PCT] Waiting for new test cases...\n";
       std::this_thread::sleep_for(10s);
     }else{
       // step(2) : execute inputs from afl, and rebuild PCT
       for (const auto& input : covnew_seeds)
         execute_one(input, &state, &symcc, &afl_config);
 
-      std::cerr << "[zgf dbg] execution tree after fuzz : " << executionTree->getLeftNodeSize() << "\n";
-      executionTree->printTree(true);
+      if (executionTree->getLeftNodeSize() > 0){
+        std::cerr << "[zgf dbg] execution tree after fuzz : " << executionTree->getLeftNodeSize() << "\n";
+        executionTree->printTree(true);
 
-      // step(3) : select uncovered traces
-      std::map<trace, std::set<trace>> ReachEdgeBranches =
-          qsym::search->recomputeGuidance();
+        /*
+        // step(3) : select uncovered traces
+        std::map<trace, std::set<trace>> ReachEdgeBranches =
+            qsym::search->recomputeGuidance();
+        for (auto guideIt : ReachEdgeBranches){
+          trace t = guideIt.first;
+          std::set<trace> *relaBranchTraces = &guideIt.second;
+          std::set<TreeNode*> leafNodes = executionTree->getBBNodes(t);
+          for (auto leafNode : leafNodes){
+            if (leafNode->depth < 3){
 
-      for (auto guideIt : ReachEdgeBranches){
-        trace t = guideIt.first;
-        std::set<trace> *relaBranchTraces = &guideIt.second;
-        std::set<TreeNode*> leafNodes = executionTree->getBBNodes(t);
-        for (auto leafNode : leafNodes){
-          if (leafNode->depth < 3){
+              std::string input = executionTree->generateTestCase(leafNode);
+              if (!input.empty())
+                qsym::execute_one(input, &state, &symcc, &afl_config);
 
-            std::string input = executionTree->generateTestCase(leafNode);
-            if (!input.empty())
-              qsym::execute_one(input, &state, &symcc, &afl_config);
+              continue;
+            }
 
-            continue;
+            std::vector<qsym::ExprRef> relaCons =
+                executionTree->getRelaConstraints(leafNode, relaBranchTraces);
+            std::cerr << t.first << "->" << t.second << ", taken: " << leafNode->data.taken << "\n";
+            for (auto e : relaCons)
+              std::cerr << "e : " << e->toString() << "\n";
           }
+        }*/
 
-          std::vector<qsym::ExprRef> relaCons =
-              executionTree->getRelaConstraints(leafNode, relaBranchTraces);
-          std::cerr << t.first << "->" << t.second << ", taken: " << leafNode->data.taken << "\n";
-          for (auto e : relaCons)
-            std::cerr << "e : " << e->toString() << "\n";
+        // step(4) : execute the inputs from PCT, decide which cov-new
+        std::vector<TreeNode *> tobeExplore = executionTree->getWillBeVisitedNodes();
+        while(!tobeExplore.empty()){
+          executePCT(&tobeExplore, &state, &symcc, &afl_config);
+          tobeExplore = executionTree->getWillBeVisitedNodes();
         }
-      }
 
-      // step(4) : execute the inputs from PCT, decide which cov-new
-      std::vector<TreeNode *> tobeExplore = executionTree->getToBeExploredNodes();
-      while(!tobeExplore.empty()){
-        executePCT(&tobeExplore, &state, &symcc, &afl_config);
-        tobeExplore = executionTree->getToBeExploredNodes();
         std::cerr << "[zgf dbg] execution tree after DSE : " << tobeExplore.size() << "\n";
         executionTree->printTree(true);
         std::cerr << "========\n";
+
+        // step (3) : dump the visited leaf node to build failed pass
+        PCT::TransformPass TP;
+        TP.buildFailedPass(executionTree, 8);
       }
     }
 

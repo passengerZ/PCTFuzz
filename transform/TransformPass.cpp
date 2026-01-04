@@ -226,39 +226,6 @@ llvm::StringRef TransformPass::insertSSASymbolForExpr(
   return symbolNameRef;
 }
 
-void TransformPass::insertFreeVariableConstruction(
-    CXXCodeBlockRef cb) {
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  // Insert bufferRef.
-  // FIXME: We should probably just use C++'s constructor syntax
-  // BufferRef<const uint8_t> jfs_buffer_ref<const uint8_t>(data, size)
-  auto bufferRefTy =
-      std::make_shared<CXXType>(program.get(), "BufferRef<const uint8_t>");
-  // Build `BufferRef<uint8_t>(data, size)` string.
-  ss << bufferRefTy->getName() << "(" << entryPointFirstArgName << ", "
-     << entryPointSecondArgName << ")";
-  ss.flush();
-
-  unsigned currentBufferBit = 0;
-  for (auto const &readExpr : allVarRead) {
-    std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(readExpr);
-
-    // construct variable
-    std::string initString;
-    llvm::raw_string_ostream tempSS(initString);
-
-    unsigned readBits = re->bits();
-    unsigned endBufferBit = currentBufferBit + readBits - 1;
-    tempSS << "data[" << re->index() << "]";
-    tempSS.flush();
-
-    exprToSymbolName.insert(std::make_pair(readExpr, initString));
-
-    currentBufferBit = endBufferBit + 1;
-  }
-}
-
 void TransformPass::insertBranchForConstraint(
     ExprRef constraint) {
   // TODO: investigate whether it is better to construct
@@ -303,45 +270,6 @@ void TransformPass::insertFuzzingTarget(CXXCodeBlockRef cb) {
       std::make_shared<CXXGenericStatement>(cb.get(), "abort()"));
 }
 
-void TransformPass::insertLibFuzzerCustomCounterInc(
-    CXXCodeBlockRef cb) {
-  return;
-//  if (!isTrackingWithLibFuzzerCustomCounter()) {
-//    return;
-//  }
-//
-//  // We emit
-//  //
-//  // if (jfs_max_num_const_sat > 1) {
-//  //   jfs_libfuzzer_custom_counter[jfs_max_num_const_sat -1] = 1
-//  // }
-//  //
-//  // In `jfs_libfuzzer_custom_counter` each byte at index `i` is used as a flag
-//  // to indicate that `i+1` constraints have been satisfied. The
-//  // `jfs_libfuzzer_custom_counter` array is special in that it gets reset to
-//  // all zeros on every call and that changing an element to a non-zero value
-//  // is treated by LibFuzzer as a "feature" (more coverage).
-//  //
-//  // This is not very efficient (i.e->  wasting 7 bits) but we can't use a more
-//  // compact representation because LibFuzzer's treatment of counter values is
-//  // such that not every bit is treated as a feature.
-//  //
-//  // See https://reviews.llvm.org/D40565
-//  std::string underlyingString;
-//  llvm::raw_string_ostream ss(underlyingString);
-//  ss << maxNumConstraintsSatisfiedSymbolName << " > 0";
-//  auto ifStatement = std::make_shared<CXXIfStatement>(cb.get(), ss.str());
-//  cb->statements.push_back(ifStatement);
-//  auto currTrueBlock = std::make_shared<CXXCodeBlock>(ifStatement.get());
-//  ifStatement->trueBlock = currTrueBlock;
-//
-//  underlyingString.clear();
-//  ss << libFuzzerCustomCounterArraySymbolName << "["
-//     << maxNumConstraintsSatisfiedSymbolName << " -1] = 1";
-//  currTrueBlock->statements.push_back(
-//      std::make_shared<CXXGenericStatement>(currTrueBlock.get(), ss.str()));
-}
-
 void TransformPass::extractVariables(const std::vector<ExprRef> &constraints){
   for (const auto& e : constraints){
     std::cerr << e->toString() << "\n";
@@ -371,11 +299,21 @@ void TransformPass::extractVariables(const std::vector<ExprRef> &constraints){
       }
     }
   }
-  for (const auto& readExpr : allVarRead){
+
+  for (auto const &readExpr : allVarRead) {
     unsigned readBits = readExpr->bits();
-    Variable v(readExpr, bufferWidthInBytes, bufferWidthInBytes + readBits);
-    variables.insert(std::make_pair(readExpr, v));
     bufferWidthInBytes += readBits;
+
+    std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(readExpr);
+
+    // construct variable
+    std::string initString;
+    llvm::raw_string_ostream tempSS(initString);
+
+    tempSS << "data[" << re->index() << "]";
+    tempSS.flush();
+
+    exprToSymbolName.insert(std::make_pair(readExpr, initString));
   }
 }
 
@@ -386,23 +324,75 @@ void TransformPass::build(const std::vector<ExprRef> &constraints) {
 
   insertHeaderIncludes();
 
-//  insertLibFuzzerCustomCounterDecl();
   auto fuzzFn = buildEntryPoint();
   entryPointMainBlock = fuzzFn->defn;
 
   insertBufferSizeGuard(fuzzFn->defn);
-  insertFreeVariableConstruction(fuzzFn->defn);
 
   // Generate constraint branches
   for (const auto& e : constraints)
     insertBranchForConstraint(e);
 
-  insertLibFuzzerCustomCounterInc(fuzzFn->defn);
   insertFuzzingTarget(fuzzFn->defn);
 
   program->print(llvm::errs());
   llvm::errs() << "========\n";
 }
+
+void TransformPass::buildFailedPass(const ExecutionTree *executionTree, unsigned depth) {
+  program = std::make_shared<CXXProgram>();
+
+  std::vector<TreeNode *> terminalNodes = executionTree->getHasVisitedLeafNodes(depth);
+  for (auto node : terminalNodes){
+    if (node->data.varBytes > bufferWidthInBytes)
+      bufferWidthInBytes = node->data.varBytes;
+  }
+
+  insertHeaderIncludes();
+
+//  insertLibFuzzerCustomCounterDecl();
+  auto fuzzFn = buildEntryPoint();
+  entryPointMainBlock = fuzzFn->defn;
+
+  insertBufferSizeGuard(fuzzFn->defn);
+
+  // Generate constraint branches
+  for (TreeNode *leafNode : terminalNodes){
+    auto currNode = leafNode;
+    std::vector<std::string> conditions;
+    while (currNode != executionTree->getRoot()) {
+      // Construct all SSA variables to get the constraint as a symbol
+      qsym::ExprRef expr = currNode->data.constraint;
+      doDFSPostOrderTraversal(expr);
+
+      std::string condition(getSymbolFor(expr));
+      if (!currNode->data.taken)
+        condition = "!" + condition;
+      conditions.push_back(condition);
+
+      currNode = currNode->parent;
+    }
+
+    std::string exitIfCondition;
+    unsigned idx = 0;
+    for (idx = 0; idx < conditions.size() - 1; idx ++)
+      exitIfCondition += conditions[idx] + " && ";
+    exitIfCondition += conditions[idx];
+
+    auto ifStatement = std::make_shared<CXXIfStatement>(
+        getCurrentBlock().get(), exitIfCondition);
+    ifStatement->trueBlock = earlyExitBlock;
+    ifStatement->falseBlock = nullptr;
+    getCurrentBlock()->statements.push_back(ifStatement);
+  }
+
+  insertFuzzingTarget(fuzzFn->defn);
+
+  program->print(llvm::errs());
+  llvm::errs() << "========\n";
+}
+
+////////////////////////
 
 std::string TransformPass::getBoolConstantStr(ExprRef e) const {
   shared_ptr<BoolExpr> boolConstExpr = castAs<BoolExpr>(e);
@@ -589,11 +579,23 @@ void TransformPass::visitConstant(ExprRef e) {
 
 void TransformPass::visitRead(ExprRef e) {
   std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(e);
+
+  // here to initial read variable
+  auto it = exprToSymbolName.find(e);
+  if (it == exprToSymbolName.end()) {
+    std::string readString;
+    llvm::raw_string_ostream readSS(readString);
+
+    readSS << "data[" << re->index() << "]";
+    readSS.flush();
+
+    exprToSymbolName.insert(std::make_pair(re, readString));
+  }
+
   std::string underlyingString;
   llvm::raw_string_ostream ss(underlyingString);
   ss << getSymbolFor(re);
   ss.flush();
-  insertSSAStmt(e, ss.str());
 }
 
 void TransformPass::visitEqual(ExprRef e) {

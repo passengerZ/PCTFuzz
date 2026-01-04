@@ -57,26 +57,25 @@ message(STATUS "protoc input : ${CMAKE_SOURCE_DIR}/runtime/protobuf/qsymExpr.pro
 message(STATUS "protoc output: ${PROTO_SRCS} ${PROTO_HDRS}")
 
 set(LLVM_VERSION "" CACHE STRING "LLVM version to use. The corresponding LLVM dev package must be installed.")
-set(TRANSFORM_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(PCTFUZZ_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(QSYM_SOURCE_DIR ${CMAKE_SOURCE_DIR}/expr)
 
-# There is list(TRANSFORM ... PREPEND ...), but it's not available before CMake 3.12.
-set(TransformSrc
-  ${TRANSFORM_SRC_DIR}/BinaryTree.cpp
-  ${TRANSFORM_SRC_DIR}/CXXProgram.cpp
-  ${TRANSFORM_SRC_DIR}/ExprASTVisitor.cpp
-  ${TRANSFORM_SRC_DIR}/TransformPass.cpp
-  ${TRANSFORM_SRC_DIR}/Watcher.cpp
+set(PCTFUZZSrc
+  ${PCTFUZZ_SRC_DIR}/BinaryTree.cpp
+  ${PCTFUZZ_SRC_DIR}/CXXProgram.cpp
+  ${PCTFUZZ_SRC_DIR}/ExprASTVisitor.cpp
+  ${PCTFUZZ_SRC_DIR}/TransformPass.cpp
+  ${PCTFUZZ_SRC_DIR}/PCTFuzzer.cpp
   ${PROTO_SRCS}
 )
 
-add_executable(Transformer ${TransformSrc})
+add_executable(PCTFuzzer ${PCTFUZZSrc})
 
-target_include_directories(Transformer PRIVATE
+target_include_directories(PCTFuzzer PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}     # for our fake pin.H and Runtime.h
   ${SYMCC_RT_INCLUDE_DIR}) # for common runtime components
 
-target_include_directories(Transformer SYSTEM PRIVATE
+target_include_directories(PCTFuzzer SYSTEM PRIVATE
   ${Z3_CXX_INCLUDE_DIRS}        # for Z3 support
   ${QSYM_SOURCE_DIR}
   ${CMAKE_CURRENT_BINARY_DIR}
@@ -85,14 +84,14 @@ target_include_directories(Transformer SYSTEM PRIVATE
 # We need to get the LLVM support component for llvm::APInt.
 llvm_map_components_to_libnames(QSYM_LLVM_DEPS support)
 
-set(TransformDeps
+set(PCTFUZZDeps
     QsymExprObj
     ${Z3_LIBRARIES}
     ${QSYM_LLVM_DEPS}
     ${PROTOBUF_LIBRARIES})
 
-target_link_libraries(Transformer ${TransformDeps})
+target_link_libraries(PCTFuzzer ${PCTFUZZDeps})
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Filesystem COMPONENTS Final Experimental)
-target_link_libraries(Transformer std::filesystem)
+target_link_libraries(PCTFuzzer std::filesystem)
