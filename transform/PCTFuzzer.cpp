@@ -52,9 +52,9 @@ Solver *g_solver;
 CallStackManager g_call_stack_manager;
 z3::context *g_z3_context;
 
+SearchStrategy *g_searcher;
 std::map<UINT32, ExprRef> cached;
 ExecutionTree *executionTree;
-SearchStrategy *search;
 
 template <typename E> constexpr auto to_underlying(E e) noexcept {
   return static_cast<std::underlying_type_t<E>>(e);
@@ -245,7 +245,7 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     //std::cerr << " " << srcBB << "->" << dstBB << ",";
 
     trace covTrace = std::make_pair(srcBB,dstBB);
-    bool isCovNew = search->updateCovTrace(covTrace);
+    bool isCovNew = executionTree->updateCovTrace(covTrace);
     // insert success, means new trace have been visited
     if (isCovNew){
       isInterest = 1;
@@ -337,15 +337,15 @@ int main (int argc, char* argv[]){
   qsym::g_z3_context = new z3::context{};
   qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, ""); // for QSYM-internal use
   qsym::g_expr_builder = qsym::SymbolicExprBuilder::create();
-  qsym::executionTree = new ExecutionTree(g_solver, g_expr_builder);
-  qsym::search = new SearchStrategy();
+  qsym::g_searcher = new SearchStrategy();
+  qsym::executionTree = new ExecutionTree(g_solver, g_expr_builder, g_searcher);
 
   while (true) {
     // 1. fetch all covnew seed, but not execute before
     // 2. symbolic execute all seed, and get path constraints tree
     // 3. rebuild PCT
     // 4. use SMT Solver to generate covnew SEED
-    // 5. if no covnew SEED, dump filter
+    // 5. generate AFL seed evaluator
     // 6. use filter to AFL++, and restart AFL++
 
     // step(1) : rebuild PCT from AFL
@@ -360,49 +360,18 @@ int main (int argc, char* argv[]){
         execute_one(input, &state, &symcc, &afl_config);
 
       if (executionTree->getLeftNodeSize() > 0){
-        std::cerr << "[zgf dbg] execution tree after fuzz : " << executionTree->getLeftNodeSize() << "\n";
-        executionTree->printTree(true);
+        // step(3) : execute the inputs from PCT, decide which cov-new
+        std::vector<TreeNode *> tobeExplore = executionTree->selectWillBeVisitedNodes(64);
+        executePCT(&tobeExplore, &state, &symcc, &afl_config);
 
-        /*
-        // step(3) : select uncovered traces
-        std::map<trace, std::set<trace>> ReachEdgeBranches =
-            qsym::search->recomputeGuidance();
-        for (auto guideIt : ReachEdgeBranches){
-          trace t = guideIt.first;
-          std::set<trace> *relaBranchTraces = &guideIt.second;
-          std::set<TreeNode*> leafNodes = executionTree->getBBNodes(t);
-          for (auto leafNode : leafNodes){
-            if (leafNode->depth < 3){
+//        std::cerr << "[zgf dbg] execution tree after DSE : " << "\n";
+//        executionTree->printTree(true);
+//        std::cerr << "========\n";
 
-              std::string input = executionTree->generateTestCase(leafNode);
-              if (!input.empty())
-                qsym::execute_one(input, &state, &symcc, &afl_config);
-
-              continue;
-            }
-
-            std::vector<qsym::ExprRef> relaCons =
-                executionTree->getRelaConstraints(leafNode, relaBranchTraces);
-            std::cerr << t.first << "->" << t.second << ", taken: " << leafNode->data.taken << "\n";
-            for (auto e : relaCons)
-              std::cerr << "e : " << e->toString() << "\n";
-          }
-        }*/
-
-        // step(4) : execute the inputs from PCT, decide which cov-new
-        std::vector<TreeNode *> tobeExplore = executionTree->getWillBeVisitedNodes();
-        while(!tobeExplore.empty()){
-          executePCT(&tobeExplore, &state, &symcc, &afl_config);
-          tobeExplore = executionTree->getWillBeVisitedNodes();
-        }
-
-        std::cerr << "[zgf dbg] execution tree after DSE : " << tobeExplore.size() << "\n";
-        executionTree->printTree(true);
-        std::cerr << "========\n";
-
-        // step (3) : dump the visited leaf node to build failed pass
+        // step (4) : dump the visited leaf node to build failed pass
         PCT::TransformPass TP;
-        TP.buildFailedPass(executionTree, 8);
+        if(TP.buildEvaluate(executionTree, 10))
+          TP.dumpEvaluator(state.evaluator_file.string());
       }
     }
 

@@ -4,6 +4,8 @@
 #include <unordered_set>
 #include <utility>
 
+#include <llvm/Support/raw_ostream.h>
+
 #include "CXXProgram.h"
 #include "ExprASTVisitor.h"
 #include "BinaryTree.h"
@@ -16,7 +18,8 @@ public:
 
   void extractVariables(const std::vector<ExprRef> &constraints);
   void build(const std::vector<ExprRef> &constraints);
-  void buildFailedPass(const ExecutionTree *executionTree, unsigned depth);
+  bool buildEvaluate(ExecutionTree *executionTree, unsigned depth);
+  void dumpEvaluator(const std::string &path);
 
   std::shared_ptr<CXXProgram> program;
   uint64_t bufferWidthInBytes  = 0;

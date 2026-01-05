@@ -133,15 +133,13 @@ template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node
 /////////////////////
 
 bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
-  if (node->status == UnReachable ||
-      fullCache.find(node) != fullCache.end()) {
-    fullCache.insert(node);
+  if (fullCache.find(node) != fullCache.end()) {
     return true;
   }
   else if (node->isLeaf()) {
-    if (node->status == HasVisited)
-      return true; // is terminal PC
-    return false;
+    if (node->status == WillbeVisit)
+      return false;
+    return true; // is terminal PC
   }
   else if (!node->left || !node->right) {
     return false;
@@ -160,7 +158,7 @@ void ExecutionTree::printTree(bool isFullPrint) {
   printTree(root, 0, isFullPrint);
 }
 
-void ExecutionTree::printNodeWithIndent(const TreeNode* node, int depth) {
+void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
   if (!node->data.constraint)
     return;
 
@@ -181,7 +179,7 @@ void ExecutionTree::printNodeWithIndent(const TreeNode* node, int depth) {
   std::cerr << '\n';
 }
 
-void ExecutionTree::printTree(const TreeNode* node, int depth, bool isFullPrint) {
+void ExecutionTree::printTree(const TreeNode* node, uint32_t depth, bool isFullPrint) {
   if (!node) return;
 
   // 先处理左子树（taken = false）
@@ -245,9 +243,9 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
   return currNode;
 }
 
-std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() const {
-  std::vector<TreeNode*> result;
-  if (!root) return result;
+std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() {
+  std::vector<TreeNode*> willbeVisited;
+  if (!root) return willbeVisited;
 
   std::queue<TreeNode*> worklist;
   worklist.push(root);
@@ -255,19 +253,29 @@ std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() const {
   while (!worklist.empty()) {
     TreeNode* node = worklist.front();
     worklist.pop();
+
+    if (isFullyBuilt(node))
+      continue;
+
     if (node->status == WillbeVisit)
-      result.push_back(node);
+      willbeVisited.push_back(node);
 
     if (node->left)  worklist.push(node->left);
     if (node->right) worklist.push(node->right);
   }
-  return result;
+
+  TraceToNode.clear();
+  for (auto node : willbeVisited){
+    trace t = getTrace(node);
+    TraceToNode[t].insert(node);
+  }
+
+  return willbeVisited;
 }
 
-std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(
-    unsigned int depth) const {
-  std::vector<TreeNode*> result;
-  if (!root) return result;
+std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(uint32_t depth) {
+  std::vector<TreeNode*> hasVisited;
+  if (!root) return hasVisited;
 
   std::queue<TreeNode*> worklist;
   worklist.push(root);
@@ -275,16 +283,87 @@ std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(
   while (!worklist.empty()) {
     TreeNode* node = worklist.front();
     worklist.pop();
-    if (node->status == HasVisited &&
-        node->depth < depth &&
-        node->isLeaf() )
-      result.push_back(node);
+
+    if (node->depth > depth)
+      continue;
+
+    if (isFullyBuilt(node)){
+      // no expand, kill early
+      hasVisited.push_back(node);
+      continue;
+    }
 
     if (node->left)  worklist.push(node->left);
     if (node->right) worklist.push(node->right);
   }
 
-  return result;
+  return hasVisited;
+}
+
+std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
+  uint32_t LeftSize = N;
+  std::vector<TreeNode*> willbeVisited;
+
+  // re-compute the tobe visited nodes
+  std::vector<TreeNode *> allNodes = getWillBeVisitedNodes();
+
+  // get the multi-object uncovered edges map : <uncovered : <rela edge>>
+  std::map<trace, std::set<trace>> targetEdges =
+      g_searcher->recomputeGuidance();
+
+  // compute each edge's weight, if weight higher, select more nodes
+  std::map<trace, uint32_t> weights;
+  uint32_t totalWeight = 0;
+  for(const auto& it : targetEdges){
+    for (auto t : it.second){
+      if (TraceToNode.count(t) == 0)
+        continue;
+      weights[t] += 1;
+      totalWeight ++;
+    }
+  }
+
+  // to sample TreeNode from TraceToNode map
+  std::vector<std::pair<trace, uint32_t>> sorted_weights(weights.begin(), weights.end());
+
+  // sort as weight, from big to small
+  std::sort(sorted_weights.begin(), sorted_weights.end(),
+            [](const auto& a, const auto& b) {
+              return a.second > b.second;});
+
+  for (const auto& pair : sorted_weights) {
+    trace t = pair.first;
+    uint32_t weight = pair.second;
+    std::set<TreeNode*> *nodes = &TraceToNode[t];
+    std::cerr << "[PCT] important trace: " << t.first << "->" << t.second
+              << ", weight: " << weight << std::endl;
+    if (LeftSize >= nodes->size()){
+      willbeVisited.insert(willbeVisited.end(), nodes->begin(), nodes->end());
+      LeftSize -= nodes->size();
+    }else if (LeftSize > 0){
+      for (auto node : *nodes){
+        if (LeftSize == 0) break;
+        willbeVisited.push_back(node);
+        LeftSize --;
+      }
+    }
+  }
+
+  // random select some nodes
+  std::set<uint32_t> nodeIDs;  // avoid to select the same node multiple!
+  for (auto node : willbeVisited)
+    nodeIDs.insert(node->id);
+  if (LeftSize > 0){
+    for (auto node : allNodes){
+      if (LeftSize == 0) break;
+      if (nodeIDs.count(node->id)) continue;
+
+      willbeVisited.push_back(node);
+      LeftSize --;
+    }
+  }
+
+  return willbeVisited;
 }
 
 std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode){

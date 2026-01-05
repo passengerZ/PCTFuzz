@@ -488,6 +488,7 @@ public:
   TestcaseDir queue, hangs, crashes, conditions, solved;
   Stats stats;
   std::ofstream stats_file;
+  fs::path evaluator_file;
   std::chrono::steady_clock::time_point last_stats_output;
 
   static State initialize(const fs::path& output_dir, const fs::path& fuzzer_output) {
@@ -502,6 +503,7 @@ public:
         .solved     = TestcaseDir{output_dir / "solved"},
         .stats      = {},
         .stats_file = std::ofstream{output_dir / "stats"},
+        .evaluator_file    = output_dir / "pct-evaluator.c",
         .last_stats_output = std::chrono::steady_clock::now()
     };
   }

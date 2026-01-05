@@ -67,7 +67,8 @@ void TransformPass::insertHeaderIncludes() {
       program.get(),"string.h",/*systemHeader=*/true));
   program->appendDecl(std::make_shared<CXXIncludeDecl>(
       program.get(),"math.h",/*systemHeader=*/true));
-
+  program->appendDecl(std::make_shared<CXXIncludeDecl>(
+      program.get(),"stdbool.h",/*systemHeader=*/true));
 
   program->appendDecl(std::make_shared<CXXGenericStatement>(
       program.get(),
@@ -82,7 +83,7 @@ void TransformPass::insertHeaderIncludes() {
 CXXFunctionDeclRef TransformPass::buildEntryPoint() {
   // Build entry point for LibFuzzer
   auto retTy = std::make_shared<CXXType>(
-      program.get(), "int");
+      program.get(), "unsigned char");
   auto firstArgTy = std::make_shared<CXXType>(
       program.get(), "const uint8_t*");
   auto secondArgTy = std::make_shared<CXXType>(
@@ -97,8 +98,8 @@ CXXFunctionDeclRef TransformPass::buildEntryPoint() {
   funcArguments.push_back(firstArg);
   funcArguments.push_back(secondArg);
   auto funcDefn = std::make_shared<CXXFunctionDecl>(
-      program.get(), "LLVMFuzzerTestOneInput", retTy, funcArguments,
-      /*hasCVisibility=*/true);
+      program.get(), "pct_evaluate_input", retTy, funcArguments,
+      /*hasCVisibility=*/false);
   auto funcBody = std::make_shared<CXXCodeBlock>(funcDefn.get());
   funcDefn->defn = funcBody; // FIXME: shouldn't be done like this
   program->appendDecl(funcDefn);
@@ -245,29 +246,11 @@ void TransformPass::insertBranchForConstraint(
 }
 
 void TransformPass::insertFuzzingTarget(CXXCodeBlockRef cb) {
-  // FIXME: Replace this with something that we can use to
-  // communicate LibFuzzer's outcome
   CXXCodeBlockRef blockForAbort = cb;
-//  CXXProgramBuilderOptions::BranchEncodingTy bet = options->getBranchEncoding();
-//  if (bet == CXXProgramBuilderOptions::BranchEncodingTy::TRY_ALL ||
-//      bet == CXXProgramBuilderOptions::BranchEncodingTy::TRY_ALL_IMNCSF) {
-//    // In these encodings we need to guard the abort to make sure all
-//    // the constraints are satisfied
-//    std::string underlyingString;
-//    llvm::raw_string_ostream ss(underlyingString);
-//    ss << numConstraintsSatisfiedSymbolName << " == " << numberOfConstraints;
-//    auto ifStatement = std::make_shared<CXXIfStatement>(cb.get(), ss.str());
-//    blockForAbort = std::make_shared<CXXCodeBlock>(cb.get());
-//    ifStatement->trueBlock = blockForAbort;
-//    // This is necessary so we don't fall off the end of the function without
-//    // returning a value.
-//    ifStatement->falseBlock = earlyExitBlock;
-//    cb->statements.push_back(ifStatement);
-//  }
   blockForAbort->statements.push_back(
       std::make_shared<CXXCommentBlock>(cb.get(), "Fuzzing target"));
   blockForAbort->statements.push_back(
-      std::make_shared<CXXGenericStatement>(cb.get(), "abort()"));
+      std::make_shared<CXXGenericStatement>(cb.get(), "return 1"));
 }
 
 void TransformPass::extractVariables(const std::vector<ExprRef> &constraints){
@@ -339,10 +322,14 @@ void TransformPass::build(const std::vector<ExprRef> &constraints) {
   llvm::errs() << "========\n";
 }
 
-void TransformPass::buildFailedPass(const ExecutionTree *executionTree, unsigned depth) {
+bool TransformPass::buildEvaluate(ExecutionTree *executionTree, unsigned depth) {
   program = std::make_shared<CXXProgram>();
 
-  std::vector<TreeNode *> terminalNodes = executionTree->getHasVisitedLeafNodes(depth);
+  std::vector<TreeNode *> terminalNodes =
+      executionTree->getHasVisitedLeafNodes(depth);
+  if (terminalNodes.empty())
+    return false;
+
   for (auto node : terminalNodes){
     if (node->data.varBytes > bufferWidthInBytes)
       bufferWidthInBytes = node->data.varBytes;
@@ -374,8 +361,8 @@ void TransformPass::buildFailedPass(const ExecutionTree *executionTree, unsigned
     }
 
     std::string exitIfCondition;
-    unsigned idx = 0;
-    for (idx = 0; idx < conditions.size() - 1; idx ++)
+    unsigned idx = conditions.size() - 1;
+    for (; idx > 0; idx --)
       exitIfCondition += conditions[idx] + " && ";
     exitIfCondition += conditions[idx];
 
@@ -388,8 +375,22 @@ void TransformPass::buildFailedPass(const ExecutionTree *executionTree, unsigned
 
   insertFuzzingTarget(fuzzFn->defn);
 
-  program->print(llvm::errs());
-  llvm::errs() << "========\n";
+//  program->print(llvm::errs());
+//  llvm::errs() << "========\n";
+  return true;
+}
+
+void TransformPass::dumpEvaluator(const std::string &path){
+  std::error_code EC;
+  llvm::raw_fd_ostream file_out(path, EC);
+
+  if (!EC) {
+    program->print(file_out);
+    file_out.flush();
+  } else {
+    llvm::errs() << "Failed to open file: " << EC.message() << "\n";
+  }
+  llvm::errs() << "[PCT] create new pct-evaluator : "<< path << "\n";
 }
 
 ////////////////////////

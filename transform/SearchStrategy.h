@@ -139,12 +139,10 @@ public:
   }
 
   void pruneRedundantUncoveredEdges(
-      std::map<trace, std::set<trace>>& ReachEdgeBranches) {
+      std::map<trace, std::set<trace>>& UnvisRelativeBranches) {
 
-    std::vector<std::pair<
-        trace,
-        std::set<trace>>>
-        edges(ReachEdgeBranches.begin(), ReachEdgeBranches.end());
+    std::vector<std::pair<trace,std::set<trace>>>
+        edges(UnvisRelativeBranches.begin(), UnvisRelativeBranches.end());
 
     // 按 critical trace 大小升序排列：小的（更浅的）优先保留
     std::sort(edges.begin(), edges.end(),
@@ -179,14 +177,14 @@ public:
     }
 
     for (const auto& e : toErase)
-      ReachEdgeBranches.erase(e);
+      UnvisRelativeBranches.erase(e);
   }
 
   std::map<trace, std::set<trace>> recomputeGuidance() {
-    std::cerr << "[zgf dbg] curr visEdge : ";
-    for (auto edge : visTrace)
-      std::cerr << edge.first << "->" << edge.second << ", ";
-    std::cerr << "\n";
+//    std::cerr << "[zgf dbg] curr visEdge : ";
+//    for (auto edge : visTrace)
+//      std::cerr << edge.first << "->" << edge.second << ", ";
+//    std::cerr << "\n";
 
     // (1) find the uncovered trace(u->v)
     std::set<trace> unvisTrace;
@@ -196,8 +194,7 @@ public:
         std::inserter(unvisTrace, unvisTrace.begin())
     );
 
-    std::map<trace,
-        std::set<trace>> ReachEdgeBranches;
+    std::map<trace, std::set<trace>> UnvisRelativeBranches;
     for (auto& edge : unvisTrace) {
       uint32_t u = edge.first;
       auto& reachBB = reachableTo[u];
@@ -215,30 +212,32 @@ public:
 
         const auto& succs = ICFG[branchNode];
         tempTrace.clear();
+
         for (uint32_t succ : succs)
           if (reachBB.count(succ))
             tempTrace.insert(std::make_pair(branchNode, succ));
+
         if (tempTrace.size() == 1) {
           towardTrace.insert(tempTrace.begin(), tempTrace.end());
         }
       }
-      ReachEdgeBranches[edge] = towardTrace;
+      UnvisRelativeBranches[edge] = towardTrace;
     }
 
     // merge multiple targets
-    pruneRedundantUncoveredEdges(ReachEdgeBranches);
+    pruneRedundantUncoveredEdges(UnvisRelativeBranches);
 
-    for (auto& it : ReachEdgeBranches) {
-      auto edge = it.first;
-      auto traces = it.second;
-      std::cerr << "[zgf dbg] uncovered : " << edge.first << "->" << edge.second << "\n";
-      std::cerr << "relative trace : ";
-      for (auto relaEdge : traces)
-        std::cerr << relaEdge.first << "->" << relaEdge.second << " ";
-      std::cerr << "\n";
-    }
+//    for (auto& it : UnvisRelativeBranches) {
+//      auto edge = it.first;
+//      auto traces = it.second;
+//      std::cerr << "[zgf dbg] uncovered : " << edge.first << "->" << edge.second << "\n";
+//      std::cerr << "relative trace : ";
+//      for (auto relaEdge : traces)
+//        std::cerr << relaEdge.first << "->" << relaEdge.second << " ";
+//      std::cerr << "\n";
+//    }
 
-    return ReachEdgeBranches;
+    return UnvisRelativeBranches;
   }
 };
 
