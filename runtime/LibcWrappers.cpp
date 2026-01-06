@@ -61,13 +61,13 @@ uint64_t inputOffset = 0;
 /// Tell the solver to try an alternative value than the given one.
 template <typename V, typename F>
 void tryAlternative(V value, SymExpr valueExpr, F caller) {
-  uintptr_t funcAddr = reinterpret_cast<uintptr_t>(caller);
-  if (valueExpr) {
-    _sym_push_path_constraint(
-        _sym_build_equal(valueExpr,
-                         _sym_build_integer(value, sizeof(value) * 8)),
-        true, funcAddr, funcAddr, funcAddr);
-  }
+//  uintptr_t funcAddr = reinterpret_cast<uintptr_t>(caller);
+//  if (valueExpr) {
+//    _sym_push_path_constraint(
+//        _sym_build_equal(valueExpr,
+//                         _sym_build_integer(value, sizeof(value) * 8)),
+//        true, funcAddr, funcAddr, funcAddr);
+//  }
 }
 
 // A partial specialization for pointer types for convenience.
@@ -612,5 +612,9 @@ uint32_t SYM(ntohl)(uint32_t netlong) {
 #endif
 
   return result;
+}
+
+void SYM(exit)(int status){
+  _sym_handle_exit(status);
 }
 }

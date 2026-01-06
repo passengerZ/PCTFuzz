@@ -45,6 +45,21 @@ bool starts_with(const std::string& str, const std::string& prefix) {
   return str.compare(0, prefix.size(), prefix) == 0;
 }
 
+bool is_under_directory(const std::string& file_path_str, const fs::path& base_dir) {
+  fs::path file_path = fs::absolute(file_path_str);
+  fs::path base = fs::absolute(base_dir);
+
+  file_path = fs::weakly_canonical(file_path);
+  base = fs::weakly_canonical(base);
+
+  if (file_path.string().length() > base.string().length() &&
+      file_path.string().substr(0, base.string().length()) == base) {
+    return true;
+  }
+
+  return false;
+}
+
 std::vector<std::string> insert_input_file(const std::vector<std::string>& command,
                                            const fs::path& input_file) {
   std::vector<std::string> fixed = command;
@@ -485,7 +500,7 @@ class State {
 public:
   AflMap current_bitmap;
   std::set<fs::path> processed_seeds;
-  TestcaseDir queue, hangs, crashes, conditions, solved;
+  TestcaseDir queue, hangs, crashes, conditions, seen, solved;
   Stats stats;
   std::ofstream stats_file;
   fs::path evaluator_file;
@@ -500,6 +515,7 @@ public:
         .hangs      = TestcaseDir{fuzzer_output / "hangs"},
         .crashes    = TestcaseDir{fuzzer_output / "crashes"},
         .conditions = TestcaseDir{output_dir / "conditions"},
+        .seen       = TestcaseDir{output_dir / "seen"},
         .solved     = TestcaseDir{output_dir / "solved"},
         .stats      = {},
         .stats_file = std::ofstream{output_dir / "stats"},
@@ -514,14 +530,14 @@ public:
     if (result.killed) {
       std::cerr << "The target process was killed (probably timeout or OOM); archiving to "
                 << hangs.path.string() << "\n";
-      copy_testcase_to_fuzzer(input, hangs);
+      copy_testcase_to_dir(input, hangs);
     }
     processed_seeds.insert(input);
     stats.add_execution(result);
     return result.constraint_file;
   }
 
-  fs::path copy_testcase_to_fuzzer(const fs::path& src, TestcaseDir& dest) {
+  fs::path copy_testcase_to_dir(const fs::path& src, TestcaseDir& dest) {
     // 格式化新文件名：id:{:06},src:{}
     std::ostringstream oss;
     oss << "id:" << std::setw(6)
@@ -553,7 +569,7 @@ public:
     case AflShowmapResultKind::Success: {
       bool interesting = current_bitmap.merge(showmap_res.map);
       if (interesting) {
-        copy_testcase_to_fuzzer(testcase, queue);
+        copy_testcase_to_dir(testcase, queue);
         return TestcaseResult::New;
       }
       return TestcaseResult::Uninteresting;
@@ -563,8 +579,8 @@ public:
       return TestcaseResult::Hang;
     case AflShowmapResultKind::Crash:
       std::cerr << "Test case " << testcase.string() << " crashes afl-showmap; probably interesting\n";
-      copy_testcase_to_fuzzer(testcase, crashes);
-      copy_testcase_to_fuzzer(testcase, queue);
+      copy_testcase_to_dir(testcase, crashes);
+      copy_testcase_to_dir(testcase, queue);
       return TestcaseResult::Crash;
     default:
       return TestcaseResult::Uninteresting;

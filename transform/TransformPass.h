@@ -21,6 +21,8 @@ public:
   bool buildEvaluate(ExecutionTree *executionTree, unsigned depth);
   void dumpEvaluator(const std::string &path);
 
+  std::set<uint32_t> lastExitNodeIDs;
+
   std::shared_ptr<CXXProgram> program;
   uint64_t bufferWidthInBytes  = 0;
   std::set<ExprRef> allVarRead;

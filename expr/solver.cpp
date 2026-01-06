@@ -286,7 +286,7 @@ void Solver::checkOutDir() {
 void Solver::readInput() {
   std::ifstream ifs (input_file_, std::ifstream::in | std::ifstream::binary);
   if (ifs.fail()) {
-    LOG_FATAL("Cannot open an input file\n");
+    LOG_FATAL("Cannot open an input file : " + input_file_ + "\n");
     exit(-1);
   }
 

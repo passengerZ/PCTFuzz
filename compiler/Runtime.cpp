@@ -197,7 +197,8 @@ bool isInterceptedFunction(const Function &f) {
       "lseek",  "lseek64", "fopen",    "fopen64", "fread",   "fseek",
       "fseeko", "rewind",  "fseeko64", "getc",    "ungetc",  "memcpy",
       "memset", "strncpy", "strchr",   "memcmp",  "memmove", "ntohl",
-      "fgets",  "fgetc",   "getchar",  "bcopy",   "bcmp",    "bzero"};
+      "fgets",  "fgetc",   "getchar",  "bcopy",   "bcmp",    "bzero",
+      "exit"};
 
   return (kInterceptedFunctions.count(f.getName()) > 0);
 }

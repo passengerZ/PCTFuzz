@@ -122,7 +122,7 @@ void TransformPass::insertBufferSizeGuard(CXXCodeBlockRef cb) {
 
   auto returnStmt =
       std::make_shared<CXXReturnIntStatement>(
-          earlyExitBlock.get(), 0);
+          earlyExitBlock.get(), 1);
   wrongSizeExitBlock->statements.push_back(returnStmt);
 
   ifStatement->trueBlock = wrongSizeExitBlock;
@@ -327,7 +327,7 @@ bool TransformPass::buildEvaluate(ExecutionTree *executionTree, unsigned depth) 
 
   std::vector<TreeNode *> terminalNodes =
       executionTree->getHasVisitedLeafNodes(depth);
-  if (terminalNodes.empty())
+  if (terminalNodes.size() < 2)
     return false;
 
   for (auto node : terminalNodes){
@@ -337,18 +337,23 @@ bool TransformPass::buildEvaluate(ExecutionTree *executionTree, unsigned depth) 
 
   insertHeaderIncludes();
 
-//  insertLibFuzzerCustomCounterDecl();
   auto fuzzFn = buildEntryPoint();
   entryPointMainBlock = fuzzFn->defn;
 
   insertBufferSizeGuard(fuzzFn->defn);
 
   // Generate constraint branches
+  std::set<TreeNode *> ancestorNodes;
   for (TreeNode *leafNode : terminalNodes){
+    lastExitNodeIDs.insert(leafNode->id);
+
     auto currNode = leafNode;
     std::vector<std::string> conditions;
     while (currNode != executionTree->getRoot()) {
-      // Construct all SSA variables to get the constraint as a symbol
+      // stop to dump ancestor nodes
+      if (ancestorNodes.count(currNode) != 0)
+        break;
+
       qsym::ExprRef expr = currNode->data.constraint;
       doDFSPostOrderTraversal(expr);
 
@@ -358,6 +363,15 @@ bool TransformPass::buildEvaluate(ExecutionTree *executionTree, unsigned depth) 
       conditions.push_back(condition);
 
       currNode = currNode->parent;
+    }
+
+    if (conditions.empty()) continue;
+
+    if (leafNode->parent){
+      if (leafNode->parent->left)
+        ancestorNodes.insert(leafNode->parent->left);
+      if (leafNode->parent->right)
+        ancestorNodes.insert(leafNode->parent->right);
     }
 
     std::string exitIfCondition;
@@ -721,7 +735,7 @@ void TransformPass::visitBvAShr(ExprRef e) {
   std::string underlyingString;
   llvm::raw_string_ostream ss(underlyingString);
   std::string eType = getBVTypeStr(e->bits(), isSigned(e));
-  ss << eType << "(" << getSymbolFor(arg0) << ") >> " << getSymbolFor(arg1);
+  ss << "((" << eType << ")" << getSymbolFor(arg0) << ") >> " << getSymbolFor(arg1);
   insertSSAStmt(e, ss.str());
 }
 
@@ -759,7 +773,7 @@ void TransformPass::visitBvSignExtend(ExprRef e) {
   auto arg0 = e->getChild(0);
 
   std::string eType = getBVTypeStr(e->bits(), isSigned(e));
-  ss << eType << "(" << getSymbolFor(arg0) << ")";
+  ss << "(" << eType << ")" << getSymbolFor(arg0);
   insertSSAStmt(e, ss.str());
 }
 

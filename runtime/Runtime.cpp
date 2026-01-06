@@ -163,6 +163,7 @@ UINT32 currBB = 0;
 std::set<std::pair<UINT32, UINT32>> visTrace;
 int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
 int runSignal = 0;
+bool isReported = false;
 std::vector<std::pair<uintptr_t, uintptr_t>> BBStack;
 } // namespace
 
@@ -737,6 +738,10 @@ void _sym_handle_exit(int val) {
 }
 
 void _sym_report_path_constraint_sequence() {
+  if (isReported)
+    return;
+  isReported = true;
+
   ConstraintSequence cs;
   cs.set_runsignal(runSignal);
 

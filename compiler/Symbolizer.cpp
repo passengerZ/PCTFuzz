@@ -953,7 +953,6 @@ void Symbolizer::visitSwitchInst(SwitchInst &I) {
     IRB.CreateCall(
         runtime.pushPathConstraint,
         {caseConstraint, caseTaken,
-         getTargetPreferredInt(&I),
          getBBID(reinterpret_cast<uint64_t>(I.getParent())),
          getBBID(reinterpret_cast<uint64_t>(caseHandle.getCaseSuccessor())),
          getBBID(reinterpret_cast<uint64_t>(falseBranch))
@@ -1121,19 +1120,22 @@ Symbolizer::SymbolicComputation Symbolizer::forceBuildRuntimeCall(
 }
 
 void Symbolizer::tryAlternative(IRBuilder<> &IRB, Value *V) {
-  auto *destExpr = getSymbolicExpression(V);
-  if (destExpr != nullptr) {
-    auto *concreteDestExpr = createValueExpression(V, IRB);
-    auto *destAssertion =
-        IRB.CreateCall(runtime.comparisonHandlers[CmpInst::ICMP_EQ],
-                       {destExpr, concreteDestExpr});
-    auto BBID = llvm::ConstantInt::get(intPtrType, -1);
-    auto *pushAssertion = IRB.CreateCall(
-        runtime.pushPathConstraint,
-        {destAssertion, IRB.getInt1(true), BBID, BBID, BBID});
-    registerSymbolicComputation(SymbolicComputation(
-        concreteDestExpr, pushAssertion, {Input(V, 0, destAssertion)}));
-  }
+//  auto *destExpr = getSymbolicExpression(V);
+//  if (destExpr != nullptr) {
+//    auto *concreteDestExpr = createValueExpression(V, IRB);
+//    auto *destAssertion =
+//        IRB.CreateCall(runtime.comparisonHandlers[CmpInst::ICMP_EQ],
+//                       {destExpr, concreteDestExpr});
+//    auto BBID = llvm::ConstantInt::get(intPtrType, -1);
+//    auto *pushAssertion = IRB.CreateCall(
+//        runtime.pushPathConstraint,
+//        {destAssertion, IRB.getInt1(true), BBID, BBID, BBID});
+//    registerSymbolicComputation(SymbolicComputation(
+//        concreteDestExpr, pushAssertion, {Input(V, 0, destAssertion)}));
+//  }
+
+    if(V->hasName() && IRB.getIsFPConstrained())
+      llvm::errs();
 }
 
 uint64_t Symbolizer::aggregateMemberOffset(Type *aggregateType,

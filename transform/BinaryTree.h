@@ -34,7 +34,7 @@ public:
   Node<T> *parent, *left, *right;
   T data;
 
-  NodeStatus status = WillbeVisit;  // -1:unsat, 0:no-visit, 1:visited
+  NodeStatus status = WillbeVisit;
   uint32_t id = 0, depth = 0;
 
   Node() : parent(NULL), left(NULL), right(NULL) {
@@ -136,7 +136,7 @@ public:
       const TreeNode *srcNode, std::set<trace> *relaBranchTraces);
   std::string generateTestCase(TreeNode *node);
 
-  void printTree(bool isFullPrint = false);
+  void printTree(uint32_t limitDepth, bool isFullPrint = false);
 
 private:
   qsym::Solver *g_solver;
@@ -150,7 +150,8 @@ private:
   bool isFullyBuilt(const TreeNode* node);
 
   void printNodeWithIndent(const TreeNode* node, uint32_t depth);
-  void printTree(const TreeNode* node, uint32_t depth, bool isFullPrint);
+  void printTree(const TreeNode* node, uint32_t depth,
+                 uint32_t limitDepth, bool isFullPrint);
 };
 
 #endif //EX2_BINARYTREE_H

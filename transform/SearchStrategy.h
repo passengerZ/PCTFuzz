@@ -3,6 +3,19 @@
 
 #include "picojson.h"
 
+class FunctionCFG {
+public:
+  std::string funcName;
+  uint32_t funcID;
+  uint32_t entryBBID;                                // 入口基本块 ID
+  std::set<uint32_t> bbIDs;                          // 本函数内所有 BB ID
+  std::map<uint32_t, std::set<uint32_t>> intraEdges; // 内部转移: srcBBID -> {dstBBID}
+  std::map<uint32_t, std::vector<std::string>> callEdges; // 调用关系: srcBBID -> [calledFuncName]
+
+  FunctionCFG(const std::string& name, uint32_t id)
+      : funcName(name), funcID(id), entryBBID(0) {}
+};
+
 typedef std::pair<uint32_t, uint32_t> trace;
 class SearchStrategy {
 public:
@@ -12,7 +25,8 @@ public:
     computeReachable();
   }
 
-  uint32_t rootBB = 0;
+  std::map<std::string, FunctionCFG> allCFGs;
+
   std::set<uint32_t> BBID;
   std::set<trace> Trace, visTrace;
   std::map<uint32_t, std::set<uint32_t>>  ICFG,  revICFG;
@@ -33,10 +47,10 @@ public:
     std::string jsonStr = buffer.str();
     file.close();
 
-    loadCFG(jsonStr);
+    constructICFG(jsonStr);
   }
 
-  void loadCFG(const std::string &jsonStr){
+  void loadCFGs(const std::string &jsonStr) {
     picojson::value v;
     std::string err = picojson::parse(v, jsonStr);
     if (!err.empty())
@@ -44,53 +58,103 @@ public:
     if (!v.is<picojson::object>())
       throw std::runtime_error("Root JSON element is not an object");
 
-    const picojson::object& root = v.get<picojson::object>();
+    auto root = v.get<picojson::object>();
+    if (root.find("functions") == root.end() ||
+        !root.at("functions").is<picojson::array>())
+      return;
 
-    auto rootIt = root.find("ROOT");
-    if (rootIt != root.end() && rootIt->second.is<double>()){
-      rootBB = static_cast<uint32_t>(rootIt->second.get<double>());
-    }
-    std::cerr << "[PCT] RootBB : " << rootBB << "\n";
+    const auto& funcs = root.at("functions").get<picojson::array>();
+    for (const auto& fval : funcs) {
+      if (!fval.is<picojson::object>()) continue;
+      auto fobj = fval.get<picojson::object>();
 
-    std::cerr << "[PCT] BBInfo : ";
-    auto bbInfoIt = root.find("BBInfo");
-    const picojson::array& bbArray = bbInfoIt->second.get<picojson::array>();
-    for (const auto& elem : bbArray) {
-      double val = elem.get<double>();
-      if (val >= 0 && val <= static_cast<double>(UINT32_MAX)) {
-        BBID.insert(static_cast<uint32_t>(val));
-        std::cerr << " " << (int)val;
+      FunctionCFG cfg("", 0);
+
+      // func_name
+      cfg.funcName  = fobj.at("func_name").get<std::string>();
+      cfg.funcID    = static_cast<uint32_t>(fobj.at("func_id").get<double>());
+      cfg.entryBBID = static_cast<uint32_t>(fobj.at("entry_bb_id").get<double>());
+
+      // bb_ids
+      for (auto& idval : fobj.at("bb_ids").get<picojson::array>())
+        cfg.bbIDs.insert(static_cast<uint32_t>(idval.get<double>()));
+
+      // intra_edges
+      auto edges = fobj.at("intra_edges").get<picojson::object>();
+      for (auto& kv : edges) {
+        uint32_t src = static_cast<uint32_t>(std::stoul(kv.first));
+        std::set<uint32_t> dsts;
+        for (auto& d : kv.second.get<picojson::array>())
+          dsts.insert(static_cast<uint32_t>(d.get<double>()));
+
+        cfg.intraEdges[src] = dsts;
       }
-    }
 
-    std::cerr << "\n[PCT] TRInfo : ";
-    auto trInfoIt = root.find("TRInfo");
-    const picojson::object& trObj = trInfoIt->second.get<picojson::object>();
-    for (const auto& kv : trObj) {
-      const std::string& srcStr     = kv.first;
-      const picojson::value& dstVal = kv.second;
-
-      uint32_t srcID;
-      try {
-        srcID = static_cast<uint32_t>(std::stoul(srcStr));
-      } catch (...) {
-        continue;
+      // call_edges
+      auto calls = fobj.at("call_edges").get<picojson::object>();
+      for (auto& kv : calls) {
+        uint32_t src = static_cast<uint32_t>(std::stoul(kv.first));
+        std::vector<std::string> callees;
+        for (auto& c : kv.second.get<picojson::array>())
+          callees.push_back(c.get<std::string>());
+        cfg.callEdges[src] = callees;
       }
 
-      const picojson::array& dstArray = dstVal.get<picojson::array>();
-      for (const auto& dstElem : dstArray) {
-        double d = dstElem.get<double>();
-        if (d >= 0 && d <= static_cast<double>(UINT32_MAX)) {
-          uint32_t dstID = static_cast<uint32_t>(d);
-          Trace.insert(std::make_pair(srcID, dstID));
-          std::cerr << " " << (int)srcID << "->" << dstID << ",";
+      allCFGs.insert({cfg.funcName, cfg});
+    }
+  }
 
-          ICFG[srcID].insert(dstID);
-          revICFG[dstID].insert(srcID);
+  void constructICFG(const std::string &jsonStr){
+    loadCFGs(jsonStr);
+
+    // Step 1: 构建函数名 → entryBBID 映射
+    std::map<std::string, uint32_t> funcNameToEntryBB;
+    for (const auto& kv : allCFGs) {
+      const FunctionCFG& cfg = kv.second;
+      funcNameToEntryBB[cfg.funcName] = cfg.entryBBID;
+    }
+
+    // Step 2: 收集所有 BBID
+    for (const auto& kv : allCFGs) {
+      const FunctionCFG& cfg = kv.second;
+      BBID.insert(cfg.bbIDs.begin(), cfg.bbIDs.end());
+
+      // Step 3: 添加 intra-procedural edges（函数内部跳转）
+      for (const auto& edge : cfg.intraEdges) {
+        uint32_t src = edge.first;
+        for (uint32_t dst : edge.second) {
+          ICFG[src].insert(dst);
+          revICFG[dst].insert(src);
+          Trace.insert({src, dst});
+        }
+      }
+
+      // Step 4: 添加 inter-procedural call edges（调用跳转）
+      for (const auto& call : cfg.callEdges) {
+        uint32_t srcBB = call.first;
+        const std::vector<std::string>& callees = call.second;
+
+        for (const std::string& calleeName : callees) {
+          auto it = funcNameToEntryBB.find(calleeName);
+          if (it != funcNameToEntryBB.end()) {
+            uint32_t entryBB = it->second;
+
+            // 添加调用边: srcBB → entryBB
+            ICFG[srcBB].insert(entryBB);
+            revICFG[entryBB].insert(srcBB);
+            Trace.insert({srcBB, entryBB});
+          }
         }
       }
     }
-    std::cerr << "\n";
+
+//    std::cerr << "[PCT] BBInfo : ";
+//    for(auto BB : BBID)
+//      std::cerr << " " << (int) BB;
+//    std::cerr << "\n[PCT] TRInfo : ";
+//    for (auto tr : Trace)
+//      std::cerr << " " << tr.first << "->" << tr.second;
+//    std::cerr << "\n";
   }
 
   void computeReachable(){

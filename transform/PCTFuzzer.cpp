@@ -56,6 +56,9 @@ SearchStrategy *g_searcher;
 std::map<UINT32, ExprRef> cached;
 ExecutionTree *executionTree;
 
+std::set<uint32_t> lastExitNodes;
+uint32_t MAX_DEPTH = 50, curr_depth = 10;
+
 template <typename E> constexpr auto to_underlying(E e) noexcept {
   return static_cast<std::underlying_type_t<E>>(e);
 }
@@ -235,7 +238,7 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     return false;
 
   // (1) covnew ----> interst = 1;
-  // (2) signal > 0 ----> crash = 2;
+  // (2) signal > 0 ----> crash = 1;
   unsigned isInterest = 0;
   //std::cerr << "[PCT] visTrace : ";
   for (int i = 0; i < cs.bbid_size(); i+=2) {
@@ -252,7 +255,7 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     }
   }
   if (cs.runsignal() != 0)
-    isInterest = 2;
+    isInterest = 1;
   //std::cerr << "\n";
 
   ExprRef pathCons;
@@ -268,23 +271,34 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
     currNode = executionTree->updateTree(currNode, pctNode);
+
+    // divergense happend, do not need to explore
+    if (currNode == executionTree->getRoot())
+      break;
   }
 
   return isInterest;
 }
 
-void execute_one(const std::string& input,
+void execute_one(std::string input,
                  State *state, SymCC *symcc, AflConfig* afl_config){
+
+  bool fromFuzzer = is_under_directory(input, state->queue.path);
+  if (fromFuzzer){
+    state->processed_seeds.insert(input);
+    // avoid symcc to failed open seed
+    fs::path currInput = state->copy_testcase_to_dir(input, state->seen);
+    input = currInput.string();
+  }
+
   fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
   unsigned inputStatus = qsym::updatePCTree(pct_file, input);
   remove_file(pct_file);
 
   // save important input
-  if (inputStatus > 0){
-    fs::path fuzzInput = state->copy_testcase_to_fuzzer(
-        input, inputStatus == 1 ? state->queue : state->crashes);
-    std::cerr << "[PCT] new important input : " << fuzzInput.string() << "\n";
-    state->processed_seeds.insert(fuzzInput);
+  if (!fromFuzzer && inputStatus > 0){
+    fs::path fuzzInput = state->copy_testcase_to_dir(input, state->queue);
+    std::cerr << "[PCT] new input : " << fuzzInput.string() << "\n";
   }
 }
 
@@ -353,27 +367,44 @@ int main (int argc, char* argv[]){
         afl_config.get_unseen_seeds(afl_config.queue, state.processed_seeds);
     if (covnew_seeds.empty()){
       std::cerr << "[PCT] Waiting for new test cases...\n";
-      std::this_thread::sleep_for(10s);
     }else{
       // step(2) : execute inputs from afl, and rebuild PCT
-      for (const auto& input : covnew_seeds)
+      for (auto input : covnew_seeds)
         execute_one(input, &state, &symcc, &afl_config);
 
-      if (executionTree->getLeftNodeSize() > 0){
-        // step(3) : execute the inputs from PCT, decide which cov-new
-        std::vector<TreeNode *> tobeExplore = executionTree->selectWillBeVisitedNodes(64);
-        executePCT(&tobeExplore, &state, &symcc, &afl_config);
+      // step(3) : execute the inputs from PCT, decide which cov-new
+      std::vector<TreeNode *> tobeExplore = executionTree->selectWillBeVisitedNodes(64);
+      std::cerr << "[zgf dbg] select nodes : " << tobeExplore.size() << "\n";
+      executePCT(&tobeExplore, &state, &symcc, &afl_config);
 
 //        std::cerr << "[zgf dbg] execution tree after DSE : " << "\n";
 //        executionTree->printTree(true);
 //        std::cerr << "========\n";
 
-        // step (4) : dump the visited leaf node to build failed pass
+      // step (4) : dump the visited leaf node to build failed pass
+      std::vector<TreeNode *> terminalNodes =
+          executionTree->getHasVisitedLeafNodes(curr_depth);
+      std::set<uint32_t> currExitNodeIDs;
+      for (auto node : terminalNodes)
+        currExitNodeIDs.insert(node->id);
+
+      bool hasChanged = currExitNodeIDs != lastExitNodes;
+
+      if (hasChanged){
         PCT::TransformPass TP;
-        if(TP.buildEvaluate(executionTree, 10))
+        if(TP.buildEvaluate(executionTree, curr_depth)){
+          // update the changed exit nodes
+          lastExitNodes.clear();
+          lastExitNodes.insert(TP.lastExitNodeIDs.begin(), TP.lastExitNodeIDs.end());
+
           TP.dumpEvaluator(state.evaluator_file.string());
+        }
+      }else{
+        curr_depth += 2;
       }
     }
+    std::cerr << "[PCT] Sleeping 10s ...\n";
+    std::this_thread::sleep_for(10s);
 
     auto now = std::chrono::steady_clock::now();
     if (now - state.last_stats_output > STATS_INTERVAL_SEC) {

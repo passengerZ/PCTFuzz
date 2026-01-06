@@ -150,12 +150,12 @@ bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
   return isFull;
 }
 
-void ExecutionTree::printTree(bool isFullPrint) {
+void ExecutionTree::printTree(uint32_t limitDepth, bool isFullPrint) {
   if (!root) {
     std::cerr << "(null root)\n";
     return;
   }
-  printTree(root, 0, isFullPrint);
+  printTree(root, 0, limitDepth, isFullPrint);
 }
 
 void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
@@ -165,8 +165,10 @@ void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
   std::string indent(depth * 2, '-');
   std::string takenStr = node->data.taken   ? "[T]" : "[F]";
   std::string isFull   = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
-  std::string status   = node->status == HasVisited  ? "[has vis]" :
-                         node->status == WillbeVisit ? "[will vis]" : "[un sat]";
+  std::string status   = node->status == UnReachable ? "[un sat]" :
+                         node->status == WillbeVisit ? "[will vis]" :
+                         node->status == HasVisited  ? "[has vis]" :
+                         "[diverse]";
 
   std::string constraintStr = node->data.constraint->toString();
   std::cerr << indent << takenStr << " " << isFull
@@ -179,21 +181,22 @@ void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
   std::cerr << '\n';
 }
 
-void ExecutionTree::printTree(const TreeNode* node, uint32_t depth, bool isFullPrint) {
-  if (!node) return;
+void ExecutionTree::printTree(const TreeNode* node, uint32_t depth,
+                              uint32_t limitDepth, bool isFullPrint) {
+  if (!node || depth > limitDepth) return;
 
   // 先处理左子树（taken = false）
   if (node->left) {
     printNodeWithIndent(node->left, depth);
     if (isFullPrint || !isFullyBuilt(node->left))
-      printTree(node->left, depth + 1, isFullPrint);
+      printTree(node->left, depth + 1, limitDepth, isFullPrint);
   }
 
   // 再处理右子树（taken = true）
   if (node->right) {
     printNodeWithIndent(node->right, depth);
     if (isFullPrint || !isFullyBuilt(node->right))
-      printTree(node->right, depth + 1, isFullPrint);
+      printTree(node->right, depth + 1, limitDepth, isFullPrint);
   }
 }
 
@@ -207,7 +210,10 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
       if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
         // if path is divergent, try to rebuild it !
         currNode->left = constructTreeNode(currNode, pctNode);
-        std::cerr << "[zgf dbg] left Divergent !!!\n";
+        fullCache.clear();
+        std::cerr << "[zgf dbg] left Divergent : "
+                  << currNode->depth << " " << currNode->data.currBB << "\n";
+        return root;
       }
 
       currNode->left->data.taken = true;
@@ -225,7 +231,10 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
       if (currNode->right->data.constraint->hash() != pctNode.constraint->hash()) {
         // if path is divergent, try to rebuild it !
         currNode->right = constructTreeNode(currNode, pctNode);
-        std::cerr << "[zgf dbg] right Divergent !!!\n";
+        fullCache.clear();
+        std::cerr << "[PCT] right Divergent : "
+                  << currNode->depth << " " << currNode->data.currBB << "\n";
+        return root;
       }
 
       currNode->right->data.taken = false;
@@ -306,7 +315,26 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
 
   // re-compute the tobe visited nodes
   std::vector<TreeNode *> allNodes = getWillBeVisitedNodes();
+  if (allNodes.size() < LeftSize)
+    return allNodes;
 
+  std::set<uint32_t> selectBB, selectNodesIDs;
+  while (LeftSize > 0){
+    selectBB.clear();
+    for (auto node : allNodes){
+      trace t = getTrace(node);
+      if (selectNodesIDs.count(node->id) == 0 &&
+          selectBB.count(t.second) == 0){
+        willbeVisited.push_back(node);
+        selectBB.insert(t.second);
+        selectNodesIDs.insert(node->id);
+      }
+    }
+    LeftSize -= selectBB.size();
+  }
+
+
+  /*
   // get the multi-object uncovered edges map : <uncovered : <rela edge>>
   std::map<trace, std::set<trace>> targetEdges =
       g_searcher->recomputeGuidance();
@@ -361,7 +389,7 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
       willbeVisited.push_back(node);
       LeftSize --;
     }
-  }
+  }*/
 
   return willbeVisited;
 }
