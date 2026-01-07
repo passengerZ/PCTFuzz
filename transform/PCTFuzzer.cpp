@@ -63,8 +63,8 @@ template <typename E> constexpr auto to_underlying(E e) noexcept {
   return static_cast<std::underlying_type_t<E>>(e);
 }
 
-void deserializeToQsymExpr(const SymbolicExpr &protoExpr,
-                           ExprRef &qsymExpr) {
+void deserializeToQsymExpr(
+    const SymbolicExpr &protoExpr,ExprRef &qsymExpr) {
   UINT32 hashValue = protoExpr.hash();
   auto it = cached.find(hashValue);
   if (it != cached.end()) {
@@ -89,7 +89,8 @@ void deserializeToQsymExpr(const SymbolicExpr &protoExpr,
   case ExprKind::Read: {
     // ReadExpr has a _index of type uint32, so we need to do a int64 t0 uint32
     // translate.
-    qsymExpr = g_expr_builder->createRead(protoExpr.value());
+    uint32_t idx = protoExpr.value();
+    qsymExpr = g_expr_builder->createRead(idx);
     break;
   }
   case ExprKind::Extract: {
@@ -228,17 +229,7 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
   ConstraintSequence cs;
   cs.ParseFromIstream(&inputf);
 
-  // if current varByte less than initial,
-  // may cause path constraint tree Divergent
-  if (executionTree->varSizeLowerBound == 0 ||
-      cs.varbytes() >= executionTree->varSizeLowerBound)
-    executionTree->varSizeLowerBound = cs.varbytes();
-
-  if (cs.varbytes() < executionTree->varSizeLowerBound)
-    return false;
-
-  // (1) covnew ----> interst = 1;
-  // (2) signal > 0 ----> crash = 1;
+  // covnew ----> interst = 1;
   unsigned isInterest = 0;
   //std::cerr << "[PCT] visTrace : ";
   for (int i = 0; i < cs.bbid_size(); i+=2) {
@@ -254,9 +245,6 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
       isInterest = 1;
     }
   }
-  if (cs.runsignal() != 0)
-    isInterest = 1;
-  //std::cerr << "\n";
 
   ExprRef pathCons;
   TreeNode *currNode = executionTree->getRoot();
@@ -266,50 +254,87 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
       continue;
 
     bool branchTaken = pnode.taken() > 0;
+
     deserializeToQsymExpr(pnode.constraint(), pathCons);
-    PCTNode pctNode(pathCons, input, branchTaken, cs.varbytes(),
+    PCTNode pctNode(pathCons, input, branchTaken, 0,
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
     currNode = executionTree->updateTree(currNode, pctNode);
-
-    // divergense happend, do not need to explore
-    if (currNode == executionTree->getRoot())
-      break;
   }
 
   return isInterest;
 }
 
-void execute_one(std::string input,
-                 State *state, SymCC *symcc, AflConfig* afl_config){
+unsigned execute_fuzzer(
+    std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
 
-  bool fromFuzzer = is_under_directory(input, state->queue.path);
-  if (fromFuzzer){
-    state->processed_seeds.insert(input);
-    // avoid symcc to failed open seed
-    fs::path currInput = state->copy_testcase_to_dir(input, state->seen);
-    input = currInput.string();
-  }
+  // avoid symcc to failed open afl-busy seed
+  fs::path currInput = state->copy_testcase_to_dir(input, state->seen);
+  input = currInput.string();
 
   fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
-  unsigned inputStatus = qsym::updatePCTree(pct_file, input);
+  qsym::updatePCTree(pct_file, input);
   remove_file(pct_file);
 
-  // save important input
-  if (!fromFuzzer && inputStatus > 0){
-    fs::path fuzzInput = state->copy_testcase_to_dir(input, state->queue);
-    std::cerr << "[PCT] new input : " << fuzzInput.string() << "\n";
-  }
+  // save covnew input
+  TestcaseResult res = state->evaluate_new_testcase(
+      input, symcc->work_dir, *afl_config, true);
+  return res == TestcaseResult::New;
 }
 
-void executePCT(std::vector<TreeNode *> *tobeExplores,
-                State *state, SymCC *symcc, AflConfig* afl_config){
+unsigned execute_dse(
+    std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
+
+  fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
+  qsym::updatePCTree(pct_file, input);
+  remove_file(pct_file);
+
+  // save covnew input
+  TestcaseResult res = state->evaluate_new_testcase(
+        input, symcc->work_dir, *afl_config, false);
+  return res == TestcaseResult::New;
+}
+
+bool execute_pct(std::vector<TreeNode *> *tobeExplores,
+                 State *state, SymCC *symcc, AflConfig* afl_config){
+  bool covNew = false;
+  if (tobeExplores->empty())
+    return covNew;
+
+//  uint32_t deepest = 0;
+//  std::string deepestCase;
+
   for (auto node : *tobeExplores){
     std::string new_case = executionTree->generateTestCase(node);
     if (new_case.empty())
       continue;
-    execute_one(new_case, state, symcc, afl_config);
+
+//    if (node->depth > deepest){
+//      deepestCase = new_case;
+//      deepest = node->depth;
+//    }
+
+    unsigned status = execute_dse(new_case, state, symcc, afl_config);
+    if (status > 0){
+      // intresting input
+      std::cerr << "[zgf dbg] covnew info BB:" << node->data.currBB
+                << ", depth:" << node->depth << "\n";
+      executionTree->updateBBWeight(node->data.currBB);
+      covNew = true;
+    }
   }
+  if (!covNew){
+//    std::string heurisCase = state->copy_testcase_to_dir(deepestCase, state->queue);
+//    std::cerr << "[PCT] Heuristic Case : " << heurisCase << "\n";
+
+    for (auto node : executionTree->divergtNodes){
+      std::string new_case = executionTree->generateTestCase(node);
+      if (new_case.empty())
+        continue;
+      execute_dse(new_case, state, symcc, afl_config);
+    }
+  }
+  return covNew;
 }
 
 } // namespace qsym
@@ -354,6 +379,7 @@ int main (int argc, char* argv[]){
   qsym::g_searcher = new SearchStrategy();
   qsym::executionTree = new ExecutionTree(g_solver, g_expr_builder, g_searcher);
 
+  bool isRestart = false;
   while (true) {
     // 1. fetch all covnew seed, but not execute before
     // 2. symbolic execute all seed, and get path constraints tree
@@ -365,21 +391,19 @@ int main (int argc, char* argv[]){
     // step(1) : rebuild PCT from AFL
     std::vector<fs::path> covnew_seeds =
         afl_config.get_unseen_seeds(afl_config.queue, state.processed_seeds);
+
     if (covnew_seeds.empty()){
-      std::cerr << "[PCT] Waiting for new test cases...\n";
-    }else{
-      // step(2) : execute inputs from afl, and rebuild PCT
-      for (auto input : covnew_seeds)
-        execute_one(input, &state, &symcc, &afl_config);
+      std::cerr << "[PCT] SMT dump new testcases ...\n";
 
       // step(3) : execute the inputs from PCT, decide which cov-new
-      std::vector<TreeNode *> tobeExplore = executionTree->selectWillBeVisitedNodes(64);
-      std::cerr << "[zgf dbg] select nodes : " << tobeExplore.size() << "\n";
-      executePCT(&tobeExplore, &state, &symcc, &afl_config);
+      std::vector<TreeNode *> tobeExplore =
+          executionTree->selectWillBeVisitedNodes(64);
+      std::cerr << "[PCT] Select nodes : " << tobeExplore.size() << "\n";
+      execute_pct(&tobeExplore, &state, &symcc, &afl_config);
 
-//        std::cerr << "[zgf dbg] execution tree after DSE : " << "\n";
-//        executionTree->printTree(true);
-//        std::cerr << "========\n";
+//    std::cerr << "[zgf dbg] execution tree after DSE : " << "\n";
+//    executionTree->printTree(true);
+//    std::cerr << "========\n";
 
       // step (4) : dump the visited leaf node to build failed pass
       std::vector<TreeNode *> terminalNodes =
@@ -389,22 +413,40 @@ int main (int argc, char* argv[]){
         currExitNodeIDs.insert(node->id);
 
       bool hasChanged = currExitNodeIDs != lastExitNodes;
+      std::cerr << "[PCT] Evaluator Changed : " << hasChanged << "\n";
 
       if (hasChanged){
         PCT::TransformPass TP;
-        if(TP.buildEvaluate(executionTree, curr_depth)){
+        if(TP.buildEvaluator(executionTree, curr_depth)){
           // update the changed exit nodes
           lastExitNodes.clear();
-          lastExitNodes.insert(TP.lastExitNodeIDs.begin(), TP.lastExitNodeIDs.end());
+          lastExitNodes.insert(currExitNodeIDs.begin(), currExitNodeIDs.end());
 
           TP.dumpEvaluator(state.evaluator_file.string());
+
+          std::this_thread::sleep_for(5s);
+
+          // AFL rename all seeds
+          state.processed_seeds.clear();
+          isRestart = true;
         }
       }else{
         curr_depth += 2;
       }
+      std::this_thread::sleep_for(3s);
+    }else{
+      // step(2) : execute inputs from afl, and rebuild PCT
+      std::cerr << "[PCT] AFL new test cases : " << covnew_seeds.size()
+                << ", isRestart : " << isRestart << "\n";
+      for (const auto& input : covnew_seeds){
+        //std::cerr << "AFL NEW : " << input.string() << "\n";
+        state.processed_seeds.insert(input);
+        if (!isRestart)
+          execute_fuzzer(input, &state, &symcc, &afl_config);
+      }
+      isRestart = false;
+      std::this_thread::sleep_for(1s);
     }
-    std::cerr << "[PCT] Sleeping 10s ...\n";
-    std::this_thread::sleep_for(10s);
 
     auto now = std::chrono::steady_clock::now();
     if (now - state.last_stats_output > STATS_INTERVAL_SEC) {

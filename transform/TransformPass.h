@@ -16,16 +16,10 @@ class TransformPass : public ExprASTVisitor {
 public:
   TransformPass();
 
-  void extractVariables(const std::vector<ExprRef> &constraints);
-  void build(const std::vector<ExprRef> &constraints);
-  bool buildEvaluate(ExecutionTree *executionTree, unsigned depth);
+  bool buildEvaluator(ExecutionTree *executionTree, unsigned depth);
   void dumpEvaluator(const std::string &path);
 
-  std::set<uint32_t> lastExitNodeIDs;
-
   std::shared_ptr<CXXProgram> program;
-  uint64_t bufferWidthInBytes  = 0;
-  std::set<ExprRef> allVarRead;
 
 private:
   CXXCodeBlockRef earlyExitBlock;
@@ -71,6 +65,8 @@ private:
     return res;
   }
 
+  uint32_t findReadIdx(ExprRef e);
+
   CXXTypeRef getOrInsertTy(ExprRef expr);
   CXXTypeRef getBVTy(uint32_t bits, bool isSign = false);
   std::string getSanitizedVariableName(const std::string& name);
@@ -80,7 +76,7 @@ private:
   // Function for building various parts of the CXXProgram
   CXXFunctionDeclRef buildEntryPoint();
   void insertHeaderIncludes();
-  void insertBufferSizeGuard(CXXCodeBlockRef cb);
+  void insertBufferSizeGuard(CXXCodeBlockRef cb, uint32_t byteWidth);
 
   void insertBranchForConstraint(ExprRef constraint);
   void insertFuzzingTarget(CXXCodeBlockRef cb);

@@ -397,7 +397,14 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id,
                                uintptr_t left_id,
                                uintptr_t right_id) {
-  if (constraint == nullptr || constraint->isBool())
+  if (constraint == nullptr || constraint->isBool() ||
+      branchConstaints.size() > 200)
+    return;
+
+  // if the constraint is same as prev, do not collect
+  if (!branchConstaints.empty() &&
+      constraint->hash() == branchConstaints.back().constraint->hash() &&
+      taken == branchConstaints.back().taken)
     return;
   BranchNode bNode(constraint, taken, site_id, left_id, right_id);
   branchConstaints.push_back(bNode);

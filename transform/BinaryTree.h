@@ -51,20 +51,6 @@ public:
   }
 
   bool isLeaf() const { return !left && !right; }
-
-  static void walk(const Node<T> *tree);
-  static Node<T> *find(Node<T> *tree, T value);
-  static Node<T> *minimum(Node<T> *tree);
-  static Node<T> *maximum(Node<T> *tree);
-  static Node<T> *successor(Node<T> *tree);
-
-  // Always returns the root of the tree, whether it had to be modified
-  // or not
-  static Node<T> *insertNode(Node<T> *tree, Node<T> *node);
-  static Node<T> *deleteNode(Node<T> *tree, Node<T> *node);
-
- private:
-  static Node<T> *transplant(Node<T> *tree, Node<T> *u, Node<T> *v);
 };
 
 struct PCTreeNode {
@@ -92,7 +78,7 @@ typedef Node<PCTNode> TreeNode;
 
 class ExecutionTree {
 public:
-  unsigned varSizeLowerBound = 0;
+  std::vector<TreeNode *> divergtNodes;
 
   ExecutionTree(qsym::Solver *solver,
                 qsym::ExprBuilder *expr_builder,
@@ -110,6 +96,11 @@ public:
 
   bool updateCovTrace(trace& newVis) {
     return g_searcher->updateCovTrace(newVis);
+  }
+
+  void updateBBWeight(uint32_t BBID){
+    if (BBWeight[BBID] < 5)
+      BBWeight[BBID] ++;
   }
 
   static trace getTrace(const TreeNode* node){
@@ -145,7 +136,7 @@ private:
 
   TreeNode *root;
   std::set<const TreeNode*> fullCache;
-  std::map<trace, std::set<TreeNode*>> TraceToNode;
+  std::map<uint32_t, uint32_t> BBWeight;
 
   bool isFullyBuilt(const TreeNode* node);
 

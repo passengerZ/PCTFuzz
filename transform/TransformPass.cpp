@@ -106,13 +106,13 @@ CXXFunctionDeclRef TransformPass::buildEntryPoint() {
   return funcDefn;
 }
 
-void TransformPass::insertBufferSizeGuard(CXXCodeBlockRef cb) {
-  if (bufferWidthInBytes == 0)
+void TransformPass::insertBufferSizeGuard(CXXCodeBlockRef cb, uint32_t byteWidth) {
+  if (byteWidth == 0)
     return;
 
   std::string underlyingString;
   llvm::raw_string_ostream condition(underlyingString);
-  condition << "size < " << bufferWidthInBytes;
+  condition << "size < " << byteWidth;
   condition.flush();
   auto ifStatement =
       std::make_shared<CXXIfStatement>(cb.get(), underlyingString);
@@ -253,76 +253,31 @@ void TransformPass::insertFuzzingTarget(CXXCodeBlockRef cb) {
       std::make_shared<CXXGenericStatement>(cb.get(), "return 1"));
 }
 
-void TransformPass::extractVariables(const std::vector<ExprRef> &constraints){
-  for (const auto& e : constraints){
-    std::cerr << e->toString() << "\n";
-    std::vector<ExprRef> stack;
-    std::set<ExprRef> visited;
+uint32_t TransformPass::findReadIdx(ExprRef e){
+  std::vector<ExprRef> stack;
+  uint32_t max_index = 0;
 
-    if (e->kind() != qsym::Kind::Constant &&
-        e->kind() != qsym::Kind::Bool &&
-        e->kind() != qsym::Kind::Float) {
-      visited.insert(e);
-      stack.push_back(e);
-    }
+  stack.push_back(e);
 
-    while (!stack.empty()) {
-      ExprRef top = stack.back();
-      stack.pop_back();
+  while (!stack.empty()) {
+    ExprRef top = stack.back();
+    stack.pop_back();
 
-      std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(top);
-      if (re != NULL) {
-        allVarRead.insert(top);
-      } else {
-        for (INT32 i = 0; i < top->num_children(); i++) {
-          ExprRef k = top->getChild(i);
-          if (visited.insert(k).second)
-            stack.push_back(k);
-        }
+    std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(top);
+    if (re != NULL) {
+      if (re->index() > max_index)
+        max_index = re->index();
+    } else {
+      for (INT32 i = 0; i < top->num_children(); i++) {
+        ExprRef k = top->getChild(i);
+        stack.push_back(k);
       }
     }
   }
-
-  for (auto const &readExpr : allVarRead) {
-    unsigned readBits = readExpr->bits();
-    bufferWidthInBytes += readBits;
-
-    std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(readExpr);
-
-    // construct variable
-    std::string initString;
-    llvm::raw_string_ostream tempSS(initString);
-
-    tempSS << "data[" << re->index() << "]";
-    tempSS.flush();
-
-    exprToSymbolName.insert(std::make_pair(readExpr, initString));
-  }
+  return max_index;
 }
 
-void TransformPass::build(const std::vector<ExprRef> &constraints) {
-  program = std::make_shared<CXXProgram>();
-
-  extractVariables(constraints);
-
-  insertHeaderIncludes();
-
-  auto fuzzFn = buildEntryPoint();
-  entryPointMainBlock = fuzzFn->defn;
-
-  insertBufferSizeGuard(fuzzFn->defn);
-
-  // Generate constraint branches
-  for (const auto& e : constraints)
-    insertBranchForConstraint(e);
-
-  insertFuzzingTarget(fuzzFn->defn);
-
-  program->print(llvm::errs());
-  llvm::errs() << "========\n";
-}
-
-bool TransformPass::buildEvaluate(ExecutionTree *executionTree, unsigned depth) {
+bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth) {
   program = std::make_shared<CXXProgram>();
 
   std::vector<TreeNode *> terminalNodes =
@@ -330,24 +285,31 @@ bool TransformPass::buildEvaluate(ExecutionTree *executionTree, unsigned depth) 
   if (terminalNodes.size() < 2)
     return false;
 
-  for (auto node : terminalNodes){
-    if (node->data.varBytes > bufferWidthInBytes)
-      bufferWidthInBytes = node->data.varBytes;
-  }
-
   insertHeaderIncludes();
 
   auto fuzzFn = buildEntryPoint();
   entryPointMainBlock = fuzzFn->defn;
 
-  insertBufferSizeGuard(fuzzFn->defn);
+  uint32_t g_read_idx = 0;
+  uint32_t curr_read_idx = 0;
+  // first, get the max read idx, set the buffer guard.
+  for (TreeNode *leafNode : terminalNodes){
+    auto currNode = leafNode;
+    while (currNode != executionTree->getRoot()) {
+      curr_read_idx = findReadIdx(currNode->data.constraint);
+      if (curr_read_idx > g_read_idx)
+        g_read_idx = curr_read_idx;
+      currNode = currNode->parent;
+    }
+  }
+  insertBufferSizeGuard(getCurrentBlock(), g_read_idx + 1);
 
   // Generate constraint branches
   std::set<TreeNode *> ancestorNodes;
   for (TreeNode *leafNode : terminalNodes){
-    lastExitNodeIDs.insert(leafNode->id);
-
     auto currNode = leafNode;
+
+    // build the conditions
     std::vector<std::string> conditions;
     while (currNode != executionTree->getRoot()) {
       // stop to dump ancestor nodes

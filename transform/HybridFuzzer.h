@@ -196,7 +196,6 @@ public:
   fs::path show_map;
   std::vector<std::string> target_command;
   bool use_standard_input;
-  bool use_qemu_mode;
   fs::path queue;
 
   static AflConfig load(const fs::path& fuzzer_output) {
@@ -247,13 +246,12 @@ public:
     fs::path afl_binary_dir = afl_binary.parent_path();
 
     bool use_stdin = std::find(target_cmd.begin(), target_cmd.end(), "@@") == target_cmd.end();
-    bool qemu_mode = std::find(tokens.begin(), tokens.end(), "-Q") != tokens.end();
+//    bool qemu_mode = std::find(tokens.begin(), tokens.end(), "-Q") != tokens.end();
 
     return AflConfig{
         afl_binary_dir / "afl-showmap",
         target_cmd,
         use_stdin,
-        qemu_mode,
         fuzzer_output / "queue"
     };
   }
@@ -273,16 +271,16 @@ public:
 
   AflShowmapResult run_showmap(const fs::path& testcase_bitmap, const fs::path& testcase) const {
     std::vector<std::string> args = {"timeout", "-k", "5", std::to_string(TIMEOUT), show_map.string()};
-    if (use_qemu_mode)
-      args.emplace_back("-Q");
+//    if (use_qemu_mode)
+//      args.emplace_back("-Q");
     args.insert(args.end(), {"-t", "5000", "-m", "none", "-b", "-o", testcase_bitmap.string()});
     auto cmd_with_input = insert_input_file(target_command, testcase);
     args.insert(args.end(), cmd_with_input.begin(), cmd_with_input.end());
 
     // Build command line string
-    std::string cmdline;
-    for (const auto& arg : args) cmdline += arg + " ";
-    std::cerr << "Running afl-showmap as follows: " << cmdline << "\n"; // debug
+//    std::string cmdline;
+//    for (const auto& arg : args) cmdline += arg + " ";
+//    std::cerr << "Running afl-showmap as follows: " << cmdline << "\n"; // debug
 
     int pipefd[2];
     if (use_standard_input) {
@@ -363,13 +361,14 @@ struct SymCCResult {
 // ----------------------------
 class SymCC {
 public:
-  fs::path input_file;
+  fs::path input_file, work_dir;
   fs::path bitmap;
   bool use_standard_input = false;
   std::vector<std::string> command;
 
   SymCC(fs::path output_dir, const std::vector<std::string>& cmd)
       : input_file(output_dir / ".cur_input")
+      , work_dir(output_dir)
       , bitmap(output_dir / "bitmap")
       , command(insert_input_file(cmd, input_file)) {}
 
@@ -540,9 +539,9 @@ public:
   fs::path copy_testcase_to_dir(const fs::path& src, TestcaseDir& dest) {
     // 格式化新文件名：id:{:06},src:{}
     std::ostringstream oss;
-    oss << "id:" << std::setw(6)
-        << std::setfill('0') << dest.current_id
-        << "," << dest.path.filename().string() << ",pct";
+    oss << "id:" << std::setw(6) << std::setfill('0') << dest.current_id
+        << ",src:" << std::setw(6) << std::setfill('0') << 0
+        << ",op:pct,+cov";
     std::string new_name = oss.str();
     fs::path target = dest.path / new_name;
 
@@ -560,28 +559,33 @@ public:
 
   TestcaseResult evaluate_new_testcase(const fs::path& testcase,
                                        const fs::path& symcc_dir,
-                                       const AflConfig& afl_config) {
-    std::cerr << "Processing test case " << testcase.string() << "\n";
+                                       const AflConfig& afl_config,
+                                       bool  isFromFuzzer) {
+    //std::cerr << "Processing test case " << testcase.string() << "\n";
     auto bitmap_path = symcc_dir / "testcase_bitmap";
 
     auto showmap_res = afl_config.run_showmap(bitmap_path, testcase);
     switch (showmap_res.kind) {
     case AflShowmapResultKind::Success: {
       bool interesting = current_bitmap.merge(showmap_res.map);
-      if (interesting) {
-        copy_testcase_to_dir(testcase, queue);
+      if (interesting && !isFromFuzzer) {
+        fs::path newCase = copy_testcase_to_dir(testcase, queue);
+        std::cerr << "[PCT] New Covnew Testcase : " << newCase.string() << "\n";
         return TestcaseResult::New;
       }
       return TestcaseResult::Uninteresting;
     }
     case AflShowmapResultKind::Hang:
-      std::cerr << "Ignoring new test case "<< testcase.string() << " because afl-showmap timed out\n";
+      //std::cerr << "Ignoring new test case "<< testcase.string() << " because afl-showmap timed out\n";
       return TestcaseResult::Hang;
-    case AflShowmapResultKind::Crash:
-      std::cerr << "Test case " << testcase.string() << " crashes afl-showmap; probably interesting\n";
-      copy_testcase_to_dir(testcase, crashes);
-      copy_testcase_to_dir(testcase, queue);
+    case AflShowmapResultKind::Crash:{
+      if (!isFromFuzzer){
+        copy_testcase_to_dir(testcase, crashes);
+        fs::path newCase = copy_testcase_to_dir(testcase, queue);
+        std::cerr << "[PCT] New Crash Testcase : " << newCase.string() << "\n";
+      }
       return TestcaseResult::Crash;
+    }
     default:
       return TestcaseResult::Uninteresting;
     }
