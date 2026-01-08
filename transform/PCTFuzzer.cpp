@@ -236,7 +236,6 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     // note : Odd position as srcBB, even position as dstBB
     const uint32_t srcBB = cs.bbid(i);
     const uint32_t dstBB = cs.bbid(i+1);
-    //std::cerr << " " << srcBB << "->" << dstBB << ",";
 
     trace covTrace = std::make_pair(srcBB,dstBB);
     bool isCovNew = executionTree->updateCovTrace(covTrace);
@@ -256,10 +255,13 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
     bool branchTaken = pnode.taken() > 0;
 
     deserializeToQsymExpr(pnode.constraint(), pathCons);
+//    std::cerr << "[zgf dbg] idx : " << i << " " << pathCons->toString() << "\n";
     PCTNode pctNode(pathCons, input, branchTaken, 0,
                     pnode.b_id(), pnode.b_left(), pnode.b_right());
 
     currNode = executionTree->updateTree(currNode, pctNode);
+    if (currNode == executionTree->getRoot())
+      break;
   }
 
   return isInterest;
@@ -295,46 +297,50 @@ unsigned execute_dse(
   return res == TestcaseResult::New;
 }
 
-bool execute_pct(std::vector<TreeNode *> *tobeExplores,
+void solved_pct(std::vector<TreeNode *> *tobeExplores,
                  State *state, SymCC *symcc, AflConfig* afl_config){
-  bool covNew = false;
   if (tobeExplores->empty())
-    return covNew;
-
-//  uint32_t deepest = 0;
-//  std::string deepestCase;
+    return;
 
   for (auto node : *tobeExplores){
     std::string new_case = executionTree->generateTestCase(node);
     if (new_case.empty())
       continue;
 
-//    if (node->depth > deepest){
-//      deepestCase = new_case;
-//      deepest = node->depth;
-//    }
-
-    unsigned status = execute_dse(new_case, state, symcc, afl_config);
-    if (status > 0){
-      // intresting input
-      std::cerr << "[zgf dbg] covnew info BB:" << node->data.currBB
-                << ", depth:" << node->depth << "\n";
-      executionTree->updateBBWeight(node->data.currBB);
-      covNew = true;
-    }
+    state->solved.current_id++;
   }
-  if (!covNew){
-//    std::string heurisCase = state->copy_testcase_to_dir(deepestCase, state->queue);
-//    std::cerr << "[PCT] Heuristic Case : " << heurisCase << "\n";
+}
 
-    for (auto node : executionTree->divergtNodes){
-      std::string new_case = executionTree->generateTestCase(node);
-      if (new_case.empty())
-        continue;
-      execute_dse(new_case, state, symcc, afl_config);
-    }
+bool build_pct_evaluator(State *state){
+  bool isNewEvaluator = false;
+
+  // step (4) : dump the visited leaf node to build failed pass
+  std::vector<TreeNode *> terminalNodes =
+      executionTree->selectTerminalNodes(curr_depth);
+  std::set<uint32_t> currTerminalIDs;
+  for (auto node : terminalNodes)
+    currTerminalIDs.insert(node->id);
+
+  bool hasChanged = currTerminalIDs != lastExitNodes;
+  std::cerr << "[PCT] Evaluator Changed: " << hasChanged
+            << ", Terminal Size: " << terminalNodes.size()
+            << ", Depth: " << curr_depth << "\n";
+
+  if (!hasChanged){
+    curr_depth += 5;
+    return isNewEvaluator;
   }
-  return covNew;
+
+  PCT::TransformPass TP;
+  if(TP.buildEvaluator(executionTree, curr_depth)){
+    // update the changed exit nodes
+    lastExitNodes.clear();
+    lastExitNodes.insert(currTerminalIDs.begin(), currTerminalIDs.end());
+
+    TP.dumpEvaluator(state->evaluator_file.string());
+    isNewEvaluator = true;
+  }
+  return isNewEvaluator;
 }
 
 } // namespace qsym
@@ -364,13 +370,13 @@ int main (int argc, char* argv[]){
     return 1;
   }
 
-  std::vector<std::string> command;
-  command.push_back(SymCCTargetBin);
-  command.push_back("@@");
-
-  SymCC symcc(symcc_dir, command);
   fs::path fuzzer_output = output_dir / fuzzer_name;
   auto afl_config = AflConfig::load(fuzzer_output);
+
+  std::vector<std::string> symcc_command(afl_config.target_command);
+  symcc_command[0] = SymCCTargetBin.c_str();
+  SymCC symcc(symcc_dir, symcc_command);
+
   auto state = State::initialize(symcc_dir, fuzzer_output);
 
   qsym::g_z3_context = new z3::context{};
@@ -379,82 +385,180 @@ int main (int argc, char* argv[]){
   qsym::g_searcher = new SearchStrategy();
   qsym::executionTree = new ExecutionTree(g_solver, g_expr_builder, g_searcher);
 
-  bool isRestart = false;
+//  bool isRestart = false;
+//  int waiting = 0;
+//  while (true) {
+//    // 1. fetch all covnew seed, but not execute before
+//    // 2. symbolic execute all seed, and get path constraints tree
+//    // 3. rebuild PCT
+//    // 4. use SMT Solver to generate covnew SEED
+//    // 5. generate AFL seed evaluator
+//    // 6. use filter to AFL++, and restart AFL++
+//
+//    // step(1) : rebuild PCT from AFL
+//    std::vector<fs::path> covnew_seeds =
+//        afl_config.get_unseen_seeds(afl_config.queue, state.processed_seeds);
+//
+//    if (covnew_seeds.empty()){
+//      waiting ++;
+//      if (waiting < 5) {
+//        std::this_thread::sleep_for(1s);
+//        continue;
+//      }
+//      waiting = 0;
+//
+//      std::cerr << "[PCT] SMT dump new testcases ...\n";
+//
+//      // step(3) : execute the inputs from PCT, decide which cov-new
+//      std::vector<TreeNode *> tobeExplore =
+//          executionTree->selectWillBeVisitedNodes(64);
+//      std::cerr << "[PCT] Select nodes : " << tobeExplore.size() << "\n";
+//      execute_pct(&tobeExplore, &state, &symcc, &afl_config);
+//
+////    std::cerr << "[zgf dbg] execution tree after DSE : " << "\n";
+////    executionTree->printTree(true);
+//      std::cerr << "========\n";
+//
+//      if (curr_depth < MAX_DEPTH){
+//        // step (4) : dump the visited leaf node to build failed pass
+//        build_pct_evaluator(state);
+//      }
+//
+//    }else{
+//
+//      if (covnew_seeds.size() > 200)
+//        isRestart = true;
+//
+//      // step(2) : execute inputs from afl, and rebuild PCT
+//      std::cerr << "[PCT] AFL new test cases : " << covnew_seeds.size()
+//                << ", isRestart : " << isRestart << "\n";
+//
+//      for (const auto& input : covnew_seeds){
+////        std::cerr << "AFL NEW : " << input.string() << "\n";
+//        state.processed_seeds.insert(input);
+//        if (!isRestart)
+//          execute_fuzzer(input, &state, &symcc, &afl_config);
+//      }
+//      isRestart = false;
+//      if (waiting > 1) waiting --;
+//      std::this_thread::sleep_for(1s);
+//    }
+//
+//    auto now = std::chrono::steady_clock::now();
+//    if (now - state.last_stats_output > STATS_INTERVAL_SEC) {
+//      try {
+//        state.stats.log(state.stats_file);
+//        state.last_stats_output = now;
+//      } catch (const std::exception& e) {
+//        std::cerr << "Failed to log run-time statistics:" << e.what() << "\n";
+//      }
+//    }
+//  }
+
+  // === 新增状态变量 ===
+  auto last_new_afl_time = std::chrono::steady_clock::now();
+  unsigned consecutive_empty_rounds = 0;
+  auto last_afl_stop_time  = std::chrono::steady_clock::now(); // 初始视为刚停过
+  auto last_evaluator_time = std::chrono::steady_clock::now();
+
+  uint32_t PollInterval = 3;
+  uint32_t NoNewTimeoutSec = 3;
+  uint32_t MaxEmptyRounds = 3;
+  uint32_t MaxGeneratedSeeds = 128;
+  uint32_t BatchSeedSize = 64;
+  uint32_t EvaluatorTimeLimitSec = 30;
+
   while (true) {
-    // 1. fetch all covnew seed, but not execute before
-    // 2. symbolic execute all seed, and get path constraints tree
-    // 3. rebuild PCT
-    // 4. use SMT Solver to generate covnew SEED
-    // 5. generate AFL seed evaluator
-    // 6. use filter to AFL++, and restart AFL++
+    std::this_thread::sleep_for(std::chrono::seconds(PollInterval));
 
-    // step(1) : rebuild PCT from AFL
     std::vector<fs::path> covnew_seeds =
-        afl_config.get_unseen_seeds(afl_config.queue, state.processed_seeds);
-
-    if (covnew_seeds.empty()){
-      std::cerr << "[PCT] SMT dump new testcases ...\n";
-
-      // step(3) : execute the inputs from PCT, decide which cov-new
-      std::vector<TreeNode *> tobeExplore =
-          executionTree->selectWillBeVisitedNodes(64);
-      std::cerr << "[PCT] Select nodes : " << tobeExplore.size() << "\n";
-      execute_pct(&tobeExplore, &state, &symcc, &afl_config);
-
-//    std::cerr << "[zgf dbg] execution tree after DSE : " << "\n";
-//    executionTree->printTree(true);
-//    std::cerr << "========\n";
-
-      // step (4) : dump the visited leaf node to build failed pass
-      std::vector<TreeNode *> terminalNodes =
-          executionTree->getHasVisitedLeafNodes(curr_depth);
-      std::set<uint32_t> currExitNodeIDs;
-      for (auto node : terminalNodes)
-        currExitNodeIDs.insert(node->id);
-
-      bool hasChanged = currExitNodeIDs != lastExitNodes;
-      std::cerr << "[PCT] Evaluator Changed : " << hasChanged << "\n";
-
-      if (hasChanged){
-        PCT::TransformPass TP;
-        if(TP.buildEvaluator(executionTree, curr_depth)){
-          // update the changed exit nodes
-          lastExitNodes.clear();
-          lastExitNodes.insert(currExitNodeIDs.begin(), currExitNodeIDs.end());
-
-          TP.dumpEvaluator(state.evaluator_file.string());
-
-          std::this_thread::sleep_for(5s);
-
-          // AFL rename all seeds
-          state.processed_seeds.clear();
-          isRestart = true;
-        }
-      }else{
-        curr_depth += 2;
-      }
-      std::this_thread::sleep_for(3s);
-    }else{
-      // step(2) : execute inputs from afl, and rebuild PCT
-      std::cerr << "[PCT] AFL new test cases : " << covnew_seeds.size()
-                << ", isRestart : " << isRestart << "\n";
-      for (const auto& input : covnew_seeds){
-        //std::cerr << "AFL NEW : " << input.string() << "\n";
-        state.processed_seeds.insert(input);
-        if (!isRestart)
-          execute_fuzzer(input, &state, &symcc, &afl_config);
-      }
-      isRestart = false;
-      std::this_thread::sleep_for(1s);
-    }
+        afl_config.get_unseen_seeds(afl_queue, state.processed_seeds);
 
     auto now = std::chrono::steady_clock::now();
+
+    if (covnew_seeds.empty()) {
+      consecutive_empty_rounds++;
+      bool timeout_no_new = (std::chrono::duration_cast<std::chrono::seconds>(
+          now - last_new_afl_time).count() >= NoNewTimeoutSec);
+      bool too_many_empty = (consecutive_empty_rounds >= MaxEmptyRounds);
+
+      if (timeout_no_new || too_many_empty) {
+        // === 触发 SMT 求解 ===
+        std::vector<TreeNode*> tobeExplore =
+            executionTree->selectWillBeVisitedNodes(BatchSeedSize);
+
+        solved_pct(&tobeExplore, &state, &symcc, &afl_config);
+        std::cerr << "[PCT] SMT Selected " << tobeExplore.size() << " nodes, Now testcases is "
+                  << state.solved.current_id <<".\n";
+
+        // 重置计数器
+        consecutive_empty_rounds = 0;
+        PollInterval ++;
+        last_new_afl_time = now; // 视为有“活动”
+      }
+
+      // === 检查是否触发 "STOP AFL" 条件 ===
+      bool total_seeds_exceeded = (state.solved.current_id >= MaxGeneratedSeeds);
+      if (total_seeds_exceeded) {
+        std::cerr << "[STOP AFL]" << std::endl;
+
+        // clean all inputs before
+        for (const auto& entry : fs::directory_iterator(afl_config.input_dir))
+          fs::remove_all(entry.path());
+
+        std::vector<fs::path> smt_testcases = get_pct_solution(state.solved.path);
+        state.solved.current_id = 0;
+
+        // move solutions cases into inputs
+        for (const auto& seed_path : smt_testcases) {
+          fs::path seed(seed_path);
+          if (fs::exists(seed)) {
+            fs::path dest = afl_config.input_dir / seed.filename();
+            try {
+              fs::rename(seed, dest);
+            } catch (...) {
+              // fallback to copy+remove if cross-device
+              fs::copy_file(seed, dest, fs::copy_options::overwrite_existing);
+              fs::remove(seed);
+            }
+          }
+        }
+
+        // 更新停止时间
+        last_afl_stop_time = std::chrono::steady_clock::now();
+      }
+
+      bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
+          now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
+      if (evaluator_limit && curr_depth < MAX_DEPTH){
+        // step (4) : dump the visited leaf node to build failed pass
+        if (build_pct_evaluator(&state)){
+          std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
+          last_evaluator_time = now;
+          EvaluatorTimeLimitSec += 10;
+        }
+      }
+
+      continue;
+    }
+
+    // === 有新 AFL 输入 ===
+    consecutive_empty_rounds = 0;
+    last_new_afl_time = now;
+
+    std::cerr << "[PCT] Got " << covnew_seeds.size() << " new AFL test cases.\n";
+    for (const auto& input : covnew_seeds) {
+      state.processed_seeds.insert(input);
+      execute_fuzzer(input.string(), &state, &symcc, &afl_config);
+    }
+
+    // === 原有的 stats 输出逻辑 ===
     if (now - state.last_stats_output > STATS_INTERVAL_SEC) {
       try {
         state.stats.log(state.stats_file);
         state.last_stats_output = now;
       } catch (const std::exception& e) {
-        std::cerr << "Failed to log run-time statistics:" << e.what() << "\n";
+        std::cerr << "Failed to log run-time statistics: " << e.what() << "\n";
       }
     }
   }

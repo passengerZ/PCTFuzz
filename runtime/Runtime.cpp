@@ -290,26 +290,26 @@ DEF_BINARY_EXPR_BUILDER(or, Or)
 DEF_BINARY_EXPR_BUILDER(bool_xor, Distinct)
 DEF_BINARY_EXPR_BUILDER(xor, Xor)
 
-DEF_BINARY_EXPR_BUILDER(fp_add, FAdd)
-DEF_BINARY_EXPR_BUILDER(fp_sub, FSub)
-DEF_BINARY_EXPR_BUILDER(fp_mul, FMul)
-DEF_BINARY_EXPR_BUILDER(fp_div, FDiv)
-DEF_BINARY_EXPR_BUILDER(fp_rem, FRem)
+//DEF_BINARY_EXPR_BUILDER(fp_add, FAdd)
+//DEF_BINARY_EXPR_BUILDER(fp_sub, FSub)
+//DEF_BINARY_EXPR_BUILDER(fp_mul, FMul)
+//DEF_BINARY_EXPR_BUILDER(fp_div, FDiv)
+//DEF_BINARY_EXPR_BUILDER(fp_rem, FRem)
 
-DEF_BINARY_EXPR_BUILDER(float_ordered_greater_than, FOgt)
-DEF_BINARY_EXPR_BUILDER(float_ordered_greater_equal, FOge)
-DEF_BINARY_EXPR_BUILDER(float_ordered_less_than, FOlt)
-DEF_BINARY_EXPR_BUILDER(float_ordered_less_equal, FOle)
-DEF_BINARY_EXPR_BUILDER(float_ordered_equal, FOeq)
-DEF_BINARY_EXPR_BUILDER(float_ordered_not_equal, FOne)
-DEF_BINARY_EXPR_BUILDER(float_ordered, FOrd)
-DEF_BINARY_EXPR_BUILDER(float_unordered, FUno)
-DEF_BINARY_EXPR_BUILDER(float_unordered_greater_than, FUgt)
-DEF_BINARY_EXPR_BUILDER(float_unordered_greater_equal, FUge)
-DEF_BINARY_EXPR_BUILDER(float_unordered_less_than, FUlt)
-DEF_BINARY_EXPR_BUILDER(float_unordered_less_equal, FUle)
-DEF_BINARY_EXPR_BUILDER(float_unordered_equal, FUeq)
-DEF_BINARY_EXPR_BUILDER(float_unordered_not_equal, FUne)
+//DEF_BINARY_EXPR_BUILDER(float_ordered_greater_than, FOgt)
+//DEF_BINARY_EXPR_BUILDER(float_ordered_greater_equal, FOge)
+//DEF_BINARY_EXPR_BUILDER(float_ordered_less_than, FOlt)
+//DEF_BINARY_EXPR_BUILDER(float_ordered_less_equal, FOle)
+//DEF_BINARY_EXPR_BUILDER(float_ordered_equal, FOeq)
+//DEF_BINARY_EXPR_BUILDER(float_ordered_not_equal, FOne)
+//DEF_BINARY_EXPR_BUILDER(float_ordered, FOrd)
+//DEF_BINARY_EXPR_BUILDER(float_unordered, FUno)
+//DEF_BINARY_EXPR_BUILDER(float_unordered_greater_than, FUgt)
+//DEF_BINARY_EXPR_BUILDER(float_unordered_greater_equal, FUge)
+//DEF_BINARY_EXPR_BUILDER(float_unordered_less_than, FUlt)
+//DEF_BINARY_EXPR_BUILDER(float_unordered_less_equal, FUle)
+//DEF_BINARY_EXPR_BUILDER(float_unordered_equal, FUeq)
+//DEF_BINARY_EXPR_BUILDER(float_unordered_not_equal, FUne)
 #undef DEF_BINARY_EXPR_BUILDER
 
 SymExpr _sym_build_neg(SymExpr expr) {
@@ -352,46 +352,55 @@ SymExpr _sym_build_trunc(SymExpr expr, uint8_t bits) {
       g_expr_builder->createTrunc(allocatedExpressions.at(expr), bits));
 }
 
-SymExpr _sym_build_fp_abs(SymExpr expr) {
-  return registerExpression(
-      g_expr_builder->createFAbs(allocatedExpressions[expr]));
-}
-
-SymExpr _sym_build_int_to_float(SymExpr value, int is_double, int is_signed) {
-  return registerExpression(g_expr_builder->intToFloat(
-      allocatedExpressions[value], is_double, is_signed));
-}
-
-SymExpr _sym_build_float_to_float(SymExpr expr, int to_double) {
-  return registerExpression(
-      g_expr_builder->floatToFloat(allocatedExpressions[expr], to_double));
-}
-
-SymExpr _sym_build_bits_to_float(SymExpr expr, int to_double) {
-  if (expr == nullptr)
-    return nullptr;
-
-  return registerExpression(
-      g_expr_builder->bitsToFloat(allocatedExpressions[expr], to_double));
-}
-
-SymExpr _sym_build_float_to_bits(SymExpr expr) {
-  if (expr == nullptr)
-    return nullptr;
-
-  return registerExpression(
-      g_expr_builder->floatToBits(allocatedExpressions[expr]));
-}
-
-SymExpr _sym_build_float_to_signed_integer(SymExpr expr, uint8_t bits) {
-  return registerExpression(
-      g_expr_builder->floatToSignInt(allocatedExpressions[expr], bits));
-}
-
-SymExpr _sym_build_float_to_unsigned_integer(SymExpr expr, uint8_t bits) {
-  return registerExpression(
-      g_expr_builder->floatToUnsignInt(allocatedExpressions[expr], bits));
-}
+//SymExpr _sym_build_float(double x, int is_double) {
+//  // We create an all-zeros bit vector, mainly to capture the length of the
+//  // value. This is compatible with our dummy implementation of
+//  // _sym_build_float_to_bits.
+//  llvm::APFloat val(x);
+//  return registerExpression(
+//      g_expr_builder->createConstantFloat(val, is_double ? 64 : 32));
+//}
+//
+//SymExpr _sym_build_fp_abs(SymExpr expr) {
+//  return registerExpression(
+//      g_expr_builder->createFAbs(allocatedExpressions[expr]));
+//}
+//
+//SymExpr _sym_build_int_to_float(SymExpr value, int is_double, int is_signed) {
+//  return registerExpression(g_expr_builder->intToFloat(
+//      allocatedExpressions[value], is_double, is_signed));
+//}
+//
+//SymExpr _sym_build_float_to_float(SymExpr expr, int to_double) {
+//  return registerExpression(
+//      g_expr_builder->floatToFloat(allocatedExpressions[expr], to_double));
+//}
+//
+//SymExpr _sym_build_bits_to_float(SymExpr expr, int to_double) {
+//  if (expr == nullptr)
+//    return nullptr;
+//
+//  return registerExpression(
+//      g_expr_builder->bitsToFloat(allocatedExpressions[expr], to_double));
+//}
+//
+//SymExpr _sym_build_float_to_bits(SymExpr expr) {
+//  if (expr == nullptr)
+//    return nullptr;
+//
+//  return registerExpression(
+//      g_expr_builder->floatToBits(allocatedExpressions[expr]));
+//}
+//
+//SymExpr _sym_build_float_to_signed_integer(SymExpr expr, uint8_t bits) {
+//  return registerExpression(
+//      g_expr_builder->floatToSignInt(allocatedExpressions[expr], bits));
+//}
+//
+//SymExpr _sym_build_float_to_unsigned_integer(SymExpr expr, uint8_t bits) {
+//  return registerExpression(
+//      g_expr_builder->floatToUnsignInt(allocatedExpressions[expr], bits));
+//}
 
 void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id,
@@ -446,44 +455,45 @@ SymExpr _sym_build_bool_to_bit(SymExpr expr) {
 // instrumentation expects to be able to create bit-vector expressions for
 // them.
 
-SymExpr _sym_build_float(double x, int is_double) {
+SymExpr _sym_build_float(double, int is_double) {
   // We create an all-zeros bit vector, mainly to capture the length of the
   // value. This is compatible with our dummy implementation of
   // _sym_build_float_to_bits.
-  llvm::APFloat val(x);
   return registerExpression(
-      g_expr_builder->createConstantFloat(val, is_double ? 64 : 32));
+      g_expr_builder->createConstant(0, is_double ? 64 : 32));
 }
+
+SymExpr _sym_build_float_to_bits(SymExpr expr) { return expr; }
 
 #define UNSUPPORTED(prototype)                                                 \
   prototype { return nullptr; }
 
-//UNSUPPORTED(SymExpr _sym_build_fp_add(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_fp_sub(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_fp_mul(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_fp_div(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_fp_rem(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_fp_abs(SymExpr))
+UNSUPPORTED(SymExpr _sym_build_fp_add(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_fp_sub(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_fp_mul(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_fp_div(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_fp_rem(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_fp_abs(SymExpr))
 UNSUPPORTED(SymExpr _sym_build_fp_neg(SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered_greater_than(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered_greater_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered_less_than(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered_less_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered_not_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_ordered(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered_greater_than(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered_greater_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered_less_than(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered_less_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_float_unordered_not_equal(SymExpr, SymExpr))
-//UNSUPPORTED(SymExpr _sym_build_int_to_float(SymExpr, int, int))
-//UNSUPPORTED(SymExpr _sym_build_float_to_float(SymExpr, int))
-//UNSUPPORTED(SymExpr _sym_build_bits_to_float(SymExpr, int))
-//UNSUPPORTED(SymExpr _sym_build_float_to_signed_integer(SymExpr, uint8_t))
-//UNSUPPORTED(SymExpr _sym_build_float_to_unsigned_integer(SymExpr, uint8_t))
+UNSUPPORTED(SymExpr _sym_build_float_ordered_greater_than(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_ordered_greater_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_ordered_less_than(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_ordered_less_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_ordered_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_ordered_not_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_ordered(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered_greater_than(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered_greater_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered_less_than(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered_less_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_float_unordered_not_equal(SymExpr, SymExpr))
+UNSUPPORTED(SymExpr _sym_build_int_to_float(SymExpr, int, int))
+UNSUPPORTED(SymExpr _sym_build_float_to_float(SymExpr, int))
+UNSUPPORTED(SymExpr _sym_build_bits_to_float(SymExpr, int))
+UNSUPPORTED(SymExpr _sym_build_float_to_signed_integer(SymExpr, uint8_t))
+UNSUPPORTED(SymExpr _sym_build_float_to_unsigned_integer(SymExpr, uint8_t))
 
 #undef UNSUPPORTED
 #undef H

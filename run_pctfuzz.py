@@ -5,280 +5,270 @@ import sys
 import shutil
 import subprocess
 import time
-import signal
 import threading
 from pathlib import Path
+import argparse
 
-# ================== Configuration (adjust as needed) ==================
-TARGET_SRC = "symcc_test"          # Source filename (without .c)
-INPUT_DIR = "./fuzz_in"
-OUTPUT_DIR = "./fuzz_out"
-CORPUS_DIR = "./corpus"            # Initial seed corpus directory
-
-# PCTFuzzer binary path (ensure this is correct)
-PCTFUZZER_BIN = "/home/aaa/FPCT/PCTFuzz/cmake-build-debug/transform/PCTFuzzer"
-PCT_EVALUATOR = "/home/aaa/FPCT/test/pct-evaluator.so"
-
-# Environment variables (matches your shell script)
-ENV_VARS = {
-    "CC": "afl-clang-lto",
-    "CXX": "afl-clang-lto++",
-    "AFL_NO_UI": "1",
-    "AFL_NO_AFFINITY": "1",
-    "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1",
-    "AFL_SKIP_CRASHES": "1",
-    "AFL_NO_FASTRESUME" : "1",
-    "PCT_CFG_PATH": f"/home/aaa/FPCT/test/{TARGET_SRC}.cfg",
-}
-
-# AFL and SymCC binary names
-AFL_BINARY = "./afl_bin"
-SYMCC_BINARY = "./symcc_bin"
-
-# AFL master instance name (must match --fuzzer-name used by PCTFuzzer)
-AFL_MASTER_NAME = "afl-master"
-# ======================================================================
-
+pctfuzzer_bin  = "/home/aaa/FPCT/PCTFuzz/cmake-build-debug/transform/PCTFuzzer"
+symcc_compiler = "/home/aaa/FPCT/PCTFuzz/cmake-build-debug/symcc"
 
 class PCTFuzzRunner:
-    def __init__(self):
+    def __init__(self, project_name, project_dir, binary_name, build_cmd, clean_cmd, input_args, work_dir):
+        self.project_name = project_name
+        self.project_dir  = project_dir
+        self.binary_name  = binary_name
+        self.build_cmd    = build_cmd
+        self.clean_cmd    = clean_cmd
+        self.input_args   = input_args
+
+        self.work_dir   = work_dir
+        self.input_dir  = Path(os.path.join(work_dir, "fuzz_in"))
+        self.output_dir = Path(os.path.join(work_dir, "fuzz_out"))
+        self.binary_dir = Path(os.path.join(work_dir, "pct_bin"))
+
+        self.src_bin   = Path(os.path.join(self.project_dir, binary_name))
+        self.afl_bin   = Path(os.path.join(self.binary_dir, binary_name+"_afl"))
+        self.symcc_bin = Path(os.path.join(self.binary_dir, binary_name+"_symcc"))
+
+        self.pct_evaluator_so  = Path(os.path.join(self.binary_dir, "pct-evaluator.so"))
+        self.pct_cfg_path = Path(os.path.join(self.binary_dir, binary_name+"_pct.cfg"))
+        
         self.afl_proc = None
         self.pct_proc = None
         self.pct_stderr_thread = None
 
-        # Path objects
-        self.target_src = Path(f"{TARGET_SRC}.c")
-        self.input_dir  = Path(INPUT_DIR)
-        self.output_dir = Path(OUTPUT_DIR)
-        self.corpus_dir = Path(CORPUS_DIR)
-        self.afl_bin    = Path(AFL_BINARY)
-        self.symcc_bin  = Path(SYMCC_BINARY)
-        
         self._validate()
 
     def _validate(self):
-        if not self.target_src.exists():
-            raise FileNotFoundError(f"Source file not found: {self.target_src}")
-        if not self.corpus_dir.exists() or not any(self.corpus_dir.iterdir()):
-            raise FileNotFoundError(f"Corpus directory is empty or does not exist: {self.corpus_dir}")
-        if not Path(PCTFUZZER_BIN).exists():
-            raise FileNotFoundError(f"PCTFuzzer binary not found: {PCTFUZZER_BIN}")
+        if not Path(self.project_dir).exists():
+            raise FileNotFoundError(f"Source directory not found: {self.project_dir}")
+        if not Path(pctfuzzer_bin).exists():
+            raise FileNotFoundError(f"PCTFuzzer binary not found: {pctfuzzer_bin}")
+        if not Path(symcc_compiler).exists():
+            raise FileNotFoundError(f"SymCC compiler not found: {symcc_compiler}")
 
     def prepare_dirs(self):
-        print("[*] Cleaning and preparing directories...")
+        print("[*] Preparing directories...")
         for d in [self.input_dir, self.output_dir]:
             if d.exists():
                 shutil.rmtree(d)
-            d.mkdir(exist_ok=True)
+            d.mkdir(parents=True, exist_ok=True)
 
-        # Copy seed files
-        seeds = list(self.corpus_dir.glob("*"))
-        for seed in seeds:
-            if seed.is_file():
-                shutil.copy(seed, self.input_dir / seed.name)
-        print(f"[+] Copied {len(seeds)} seed(s) to {self.input_dir}")
+        seed_file = self.input_dir / "seed0"
+        with open(seed_file, "wb") as f:
+            f.write(b"A" * 20)
+
+        print(f"[+] Generated fixed seed (20 bytes) at {seed_file}")
+
+    def run_shell_cmd(self, cmd_str, cwd, env):
+        """Run a shell command string (supports &&, pipes, etc.)"""
+        print(f"    Running: {cmd_str} in {cwd}")
+        result = subprocess.run(
+            cmd_str,
+            shell=True,
+            cwd=cwd,
+            env=env,
+            check=True,
+            text=True
+        )
+        return result
 
     def compile_afl_binary(self):
         print("[*] Compiling AFL++ binary...")
         env = os.environ.copy()
-        env.update(ENV_VARS)
+        env.update({
+            "CC": "afl-clang-lto",
+            "CXX": "afl-clang-lto++",
+        })
 
-        cmd = ["afl-clang-lto", str(self.target_src), "-o", str(self.afl_bin)]
-        subprocess.run(cmd, env=env, check=True)
-        print(f"[+] AFL binary generated: {self.afl_bin}")
-        
-    def compile_evaluator_library(self):
-        print("[*] Compiling PCT Evaluator library...")
-        env = os.environ.copy()
-        env.update(ENV_VARS)
+        # Clean
+        self.run_shell_cmd(self.clean_cmd, self.project_dir, env)
+        # Build
+        self.run_shell_cmd(self.build_cmd, self.project_dir, env)
 
-        cmd = ["gcc", "-O3", "-funroll-loops", "-g", "-shared", "-fPIC", self.pct_evaluator_src, "-o", str(PCT_EVALUATOR)]
-        subprocess.run(cmd, env=env, check=True)
-        print(f"[+] PCT Evaluator generated: {PCT_EVALUATOR}")
+        if not self.src_bin.exists():
+            raise FileNotFoundError(f"Binary not found after build: {self.src_bin}")
+        shutil.copy(self.src_bin, self.afl_bin)
+        print(f"[+] AFL binary: {self.afl_bin}")
 
     def compile_symcc_binary(self):
         print("[*] Compiling SymCC binary...")
         env = os.environ.copy()
-        env.update(ENV_VARS)
-        
-        symcc_compiler = "/home/aaa/FPCT/PCTFuzz/cmake-build-debug/symcc"
-        if not Path(symcc_compiler).exists():
-            raise FileNotFoundError(f"SymCC compiler not found: {symcc_compiler}")
+        env.update({
+            "CC":  symcc_compiler,
+            "CXX": symcc_compiler,
+            "PCT_CFG_PATH": str(self.pct_cfg_path),
+        })
 
-        cmd = [symcc_compiler, str(self.target_src), "-o", str(self.symcc_bin)]
-        subprocess.run(cmd, env=env, check=True)
-        print(f"[+] SymCC binary generated: {self.symcc_bin}")
+        self.run_shell_cmd(self.clean_cmd, self.project_dir, env)
+        self.run_shell_cmd(self.build_cmd, self.project_dir, env)
 
-    def start_afl(self):
-        print("[*] Starting AFL++ master instance...")
+        if not self.src_bin.exists():
+            raise FileNotFoundError(f"SymCC binary not found: {self.src_bin}")
+        shutil.copy(self.src_bin, self.symcc_bin)
+        print(f"[+] SymCC binary: {self.symcc_bin}")
+
+    def start_afl(self, isRestart):
+        print("[*] Starting AFL++ master...")
         env = os.environ.copy()
-        env.update(ENV_VARS)
+        env.update({
+            "AFL_NO_UI": "1",
+            #"AFL_NO_AFFINITY": "1",
+            "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1",
+            "AFL_SKIP_CRASHES": "1",
+            "AFL_NO_FASTRESUME": "1",
+            "AFL_AUTORESUME" : "1",
+        })
+        
+        if isRestart:
+            env.update({"AFL_AUTORESUME" : "1"})
+
         cmd = [
             "afl-fuzz",
-            "-M", AFL_MASTER_NAME,
-            "-i", "./" + str(self.input_dir),
-            "-o", "./" + str(self.output_dir),
-            "--", "./" + str(self.afl_bin), "@@"
+            "-M", "afl-master",
+            "-i", str(self.input_dir),
+            "-o", str(self.output_dir),
+            "--", str(self.afl_bin)
         ]
+        cmd.extend(self.input_args)
 
         self.afl_proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            cmd, env=env,  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         print(f"[+] AFL++ started (PID: {self.afl_proc.pid})")
         
-    def restart_afl(self):
-        """Pause AFL++ for 2 seconds then restart it."""
-        print("[*] Pausing AFL++...")
-    
-        # Terminate current AFL process
+    def stop_afl(self):
+        print("[*] Stop AFL++ ......")
         if self.afl_proc and self.afl_proc.poll() is None:
             self.afl_proc.terminate()
             try:
                 self.afl_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                print("  - AFL++ did not terminate gracefully, killing...")
                 self.afl_proc.kill()
                 self.afl_proc.wait()
         time.sleep(1)
-    
-        print("[+] Restarting AFL++...")
-        # Use resume mode: -i -
-        cmd = [
-            "afl-fuzz",
-            "-M", AFL_MASTER_NAME,
-            "-i", "-",
-            "-o", "./" + str(self.output_dir),
-            "--", "./" + str(self.afl_bin), "@@"
-        ]
-        
-        env = os.environ.copy()
-        env.update(ENV_VARS)
-        env["AFL_PCT_EVALUATOR_LIBRARY"] = PCT_EVALUATOR
-        
-        self.afl_proc = subprocess.Popen(
-            cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        print(f"[+] AFL++ restarted (PID: {self.afl_proc.pid})")
 
     def start_pctfuzzer(self):
         print("[*] Starting PCTFuzzer...")
         env = os.environ.copy()
-        env.update(ENV_VARS)
-    
-        # Wait for AFL to create the master instance directory
-        afl_master_dir = self.output_dir / AFL_MASTER_NAME
+        env["PCT_CFG_PATH"] = str(self.pct_cfg_path)
+
+        afl_master_dir = self.output_dir / "afl-master"
         for _ in range(10):
             if afl_master_dir.exists():
                 break
             time.sleep(1)
         else:
-            raise RuntimeError("AFL master directory was not created within 10 seconds")
+            raise RuntimeError("AFL master dir not created in 10s")
 
         cmd = [
-            PCTFUZZER_BIN,
-            f"--fuzzer-name={AFL_MASTER_NAME}",
-            f"--output-dir=./{self.output_dir}",
-            "./" + str(self.symcc_bin)
+            pctfuzzer_bin,
+            "--fuzzer-name=afl-master",
+            f"--output-dir={self.output_dir}",
+            str(self.symcc_bin)
         ]
 
-        # Capture stderr for monitoring
         self.pct_proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,   # invisible
-            stderr=subprocess.PIPE,      # Capture output
-            universal_newlines=False     # We'll decode manually
+            cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, universal_newlines=False
         )
         print(f"[+] PCTFuzzer started (PID: {self.pct_proc.pid})")
 
-        # Start stderr monitoring thread
         self.pct_stderr_thread = threading.Thread(target=self.monitor_pct_stderr, daemon=True)
         self.pct_stderr_thread.start()
-        
+
     def monitor_pct_stderr(self):
-        """Background thread to monitor PCTFuzzer stderr."""
         try:
             while self.pct_proc.poll() is None:
                 line = self.pct_proc.stderr.readline()
                 if not line:
                     break
                 line_str = line.decode('utf-8', errors='replace').strip()
-                print(f"{line_str}")
-            
-                # Check for trigger string
-                if "create new pct-evaluator" in line_str:
-                    print(f"[!] PCT has generated new evaluator, Pausing AFL++...")
+                print(line_str)
+
+                if "[STOP AFL]" in line_str:
+                    self.stop_afl()
                     
-                    # rebuild the pct-evaluator
-                    self.pct_evaluator_src = line_str.split(':')[1].strip()
-                    self.compile_evaluator_library()
-                    
-                    self.restart_afl()
-                    
+                    if ":" in line_str:
+                        print("[+] PCTFuzz create new evaluator ......")
+                        src_path = line_str.split(":", 1)[1].strip()   
+                        self.compile_evaluator_from(src_path)
+                    else:
+                        print("[+] PCTFuzz seed synchronization ......")
+                        
+                    time.sleep(3)
+                    self.start_afl(True) 
+               
         except Exception as e:
-            print(f"[ERROR] Error monitoring PCTFuzzer stderr: {e}")
-        finally:
-            # Drain remaining stderr
-            for line in iter(self.pct_proc.stderr.readline, b''):
-                print(f"{line.decode('utf-8', errors='replace').strip()}")
+            print(f"[ERROR] Monitor error: {e}")
+
+    def compile_evaluator_from(self, c_file):
+        cmd = [
+            "gcc", "-O3", "-funroll-loops", "-g", "-shared", "-fPIC",
+            c_file, "-o", str(self.pct_evaluator_so)
+        ]
+        subprocess.run(cmd, check=True)
+        print(f"[+] Evaluator compiled: {self.pct_evaluator_so}")
 
     def run(self):
-        print("[+] Starting PCTFuzz hybrid fuzzing...\n")
-        
-        env = os.environ.copy()
-        env.update(ENV_VARS)
-        cfg_path = Path(ENV_VARS["PCT_CFG_PATH"])
+        print(f"[+] Starting PCTFuzz for project: {self.project_name}")
+        print("[+] Hybrid fuzzing running!")
+        print(f"   Project: {self.project_name}")
+        print(f"   AFL Output: {self.output_dir}/afl-master")
+        print( "   Press Ctrl+C to stop...\n")
 
         self.prepare_dirs()
-        self.compile_afl_binary()
-        self.compile_symcc_binary()
+        #self.compile_afl_binary()
+        #self.compile_symcc_binary()
 
-        self.start_afl()
-        time.sleep(10)  # Ensure AFL has initialized
-
+        self.start_afl(False)
+        time.sleep(5)
         self.start_pctfuzzer()
-
-        print("\n[+] Hybrid fuzzing is running!")
-        print(f"   - AFL output directory: {self.output_dir}/{AFL_MASTER_NAME}")
-        print(f"   - PCTFuzzer is monitoring this directory and generating new inputs")
-        print("\nPress Ctrl+C to stop...\n")
 
         try:
             while True:
                 if self.pct_proc.poll() is None or self.afl_proc.poll() is None:
-                    time.sleep(1)  # 更短的 sleep，更快响应
+                    time.sleep(1)
                 else:
-                    print("[!] PCTFuzzer/AFL++ process exited.")
+                    print("[!] A process exited.")
                     break
-                
         except KeyboardInterrupt:
-            print("\n[!] Received interrupt signal, shutting down...")
+            print("\n[!] Interrupt received.")
         finally:
             self.stop()
 
     def stop(self):
-        print("[*] Terminating child processes...")
-
+        print("[*] Shutting down...")
         for name, proc in [("AFL++", self.afl_proc), ("PCTFuzzer", self.pct_proc)]:
             if proc and proc.poll() is None:
-                print(f"  - Terminating {name} (PID {proc.pid})...")
                 proc.terminate()
                 try:
                     proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    print(f"  - Killing {name} forcefully...")
+                except:
                     proc.kill()
+        print("[+] Done.")
 
-        print("[+] All processes stopped.")
-
+JHEAD_CONFIG = {
+    "project_name": "jhead-3.08",
+    "project_dir" : "/home/aaa/FPCT/bench/jhead-3.08",
+    "build_cmd": ["make"],
+    "clean_cmd": ["make", "clean"],
+    "binary_name": "jhead",
+    "input_args": ["@@"],  # 或 "-f", "@@" 等，根据 target 调整
+}
 
 def main():
-    runner = PCTFuzzRunner()
+    #args = parse_args()
+    work_dir = "/home/aaa/FPCT/bench/"
+    runner = PCTFuzzRunner(
+        JHEAD_CONFIG["project_name"],
+        JHEAD_CONFIG["project_dir"],
+        JHEAD_CONFIG["binary_name"],
+        JHEAD_CONFIG["build_cmd"],
+        JHEAD_CONFIG["clean_cmd"],
+        JHEAD_CONFIG["input_args"],
+        work_dir
+    )
     runner.run()
-
 
 if __name__ == "__main__":
     main()

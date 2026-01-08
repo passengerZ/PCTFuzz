@@ -60,6 +60,25 @@ bool is_under_directory(const std::string& file_path_str, const fs::path& base_d
   return false;
 }
 
+std::vector<fs::path> get_pct_solution(fs::path& dir) {
+  std::vector<fs::path> result;
+
+  if (!fs::exists(dir) || !fs::is_directory(dir)) {
+    return result;
+  }
+
+  for (const auto& entry : fs::directory_iterator(dir)) {
+    if (entry.is_regular_file()) {
+      const std::string filename = entry.path().filename().string();
+      if (filename.substr(0, 4) == "pct_") {
+        result.push_back(entry.path());
+      }
+    }
+  }
+
+  return result;
+}
+
 std::vector<std::string> insert_input_file(const std::vector<std::string>& command,
                                            const fs::path& input_file) {
   std::vector<std::string> fixed = command;
@@ -197,6 +216,7 @@ public:
   std::vector<std::string> target_command;
   bool use_standard_input;
   fs::path queue;
+  fs::path input_dir;
 
   static AflConfig load(const fs::path& fuzzer_output) {
     fs::path stats_file = fuzzer_output / "fuzzer_stats";
@@ -233,6 +253,14 @@ public:
       }
     }
 
+    fs::path input_dir;
+    for (size_t i = 0; i < tokens.size(); ++i) {
+      if (tokens[i] == "-i" && i + 1 < tokens.size()) {
+        input_dir = tokens[i + 1];
+        break;
+      }
+    }
+
     // Find "--"
     auto it = std::find(tokens.begin(), tokens.end(), "--");
     std::vector<std::string> target_cmd;
@@ -252,7 +280,8 @@ public:
         afl_binary_dir / "afl-showmap",
         target_cmd,
         use_stdin,
-        fuzzer_output / "queue"
+        fuzzer_output / "queue",
+        input_dir
     };
   }
 

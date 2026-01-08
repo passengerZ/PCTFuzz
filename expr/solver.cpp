@@ -144,7 +144,7 @@ z3::check_result Solver::check() {
   uint64_t cur = getTimeStamp();
   uint64_t elapsed = cur - before;
   solving_time_ += elapsed;
-//  LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
+//  LOG_STAT("SMT: { \"curr solving_time\": " + decstr(elapsed) + " }\n");
   return res;
 }
 
@@ -371,7 +371,7 @@ std::string Solver::fetchTestcase() {
 
   std::vector<UINT8> values = getConcreteValues();
 
-  fname = out_dir_+ "/" + toString6digit(num_generated_);
+  fname = out_dir_+ "/pct_" + toString6digit(num_generated_);
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");

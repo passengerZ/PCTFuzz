@@ -617,4 +617,53 @@ uint32_t SYM(ntohl)(uint32_t netlong) {
 void SYM(exit)(int status){
   _sym_handle_exit(status);
 }
+
+int SYM(strcmp)(const char *a, const char *b) {
+  tryAlternative(a, _sym_get_parameter_expression(0), SYM(bcmp));
+  tryAlternative(b, _sym_get_parameter_expression(1), SYM(bcmp));
+
+  int result = strcmp(a, b);
+
+  _sym_set_return_expression(nullptr);
+
+  int len_a = strlen(a);
+  int len_b = strlen(b);
+  int min_len = std::min(len_a, len_b);
+
+  // do not handle large constraints
+  if (min_len > 10)
+    return result;
+
+  if (isConcrete(a, strlen(a)) && isConcrete(b, strlen(b)))
+    return result;
+
+  auto aShadowIt = ReadOnlyShadow(a, len_a).begin_non_null();
+  auto bShadowIt = ReadOnlyShadow(b, len_b).begin_non_null();
+  auto *allEqual = _sym_build_equal(*aShadowIt, *bShadowIt);
+  for (size_t i = 1; i < (size_t)min_len; i++) {
+    ++aShadowIt;
+    ++bShadowIt;
+    allEqual =
+        _sym_build_bool_and(allEqual, _sym_build_equal(*aShadowIt, *bShadowIt));
+  }
+
+  // the last character
+  if (len_a > len_b){
+    ++aShadowIt;
+    allEqual = _sym_build_bool_and(
+            allEqual,_sym_build_equal(_sym_build_integer(0, 8), *aShadowIt));
+  }else if (len_a < len_b){
+    ++bShadowIt;
+    allEqual = _sym_build_bool_and(
+        allEqual, _sym_build_equal(_sym_build_integer(0, 8), *bShadowIt));
+  }
+
+
+  uintptr_t funcAddr = reinterpret_cast<uintptr_t>(SYM(strcmp));
+  _sym_push_path_constraint(allEqual, result == 0,
+                            funcAddr, funcAddr, funcAddr);
+  return result;
+
+  return result;
+}
 }

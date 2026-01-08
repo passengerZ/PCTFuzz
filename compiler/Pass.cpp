@@ -439,8 +439,18 @@ bool instrumentFunction(Function &F) {
   for (auto &basicBlock : F)
     symbolizer.insertBasicBlockNotification(basicBlock);
 
-  for (auto *instPtr : allInstructions)
-    symbolizer.visit(instPtr);
+
+  // do not need instrument in driver program
+  if (functionName != "main"){
+    for (auto *instPtr : allInstructions)
+      symbolizer.visit(instPtr);
+  }else{
+    // only instrument to report PCT
+    for (auto *instPtr : allInstructions){
+      if(isa<ReturnInst>(instPtr))
+        symbolizer.visit(instPtr);
+    }
+  }
 
   symbolizer.finalizePHINodes();
   symbolizer.shortCircuitExpressionUses();

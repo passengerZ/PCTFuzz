@@ -49,6 +49,7 @@ CXXTypeRef TransformPass::getOrInsertTy(ExprRef e) {
         program.get(), underlyingString, /*isConst=*/false);
     return ty;
   }else{
+    llvm::errs() << "[PCT] Unhandle Expr : " << e->toString() << "\n";
     llvm_unreachable("Unhandled sort");
   }
 }
@@ -281,7 +282,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
   program = std::make_shared<CXXProgram>();
 
   std::vector<TreeNode *> terminalNodes =
-      executionTree->getHasVisitedLeafNodes(depth);
+      executionTree->selectWillBeVisitedNodes(depth);
   if (terminalNodes.size() < 2)
     return false;
 
@@ -291,59 +292,27 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
   entryPointMainBlock = fuzzFn->defn;
 
   uint32_t g_read_idx = 0;
-  uint32_t curr_read_idx = 0;
-  // first, get the max read idx, set the buffer guard.
-  for (TreeNode *leafNode : terminalNodes){
-    auto currNode = leafNode;
-    while (currNode != executionTree->getRoot()) {
-      curr_read_idx = findReadIdx(currNode->data.constraint);
-      if (curr_read_idx > g_read_idx)
-        g_read_idx = curr_read_idx;
-      currNode = currNode->parent;
-    }
-  }
-  insertBufferSizeGuard(getCurrentBlock(), g_read_idx + 1);
-
+  std::set<std::string> g_conditions;
   // Generate constraint branches
-  std::set<TreeNode *> ancestorNodes;
   for (TreeNode *leafNode : terminalNodes){
-    auto currNode = leafNode;
+    uint32_t maxReadID = findReadIdx(leafNode->data.constraint);
+    if (maxReadID > g_read_idx){
+      g_read_idx = maxReadID;
+      insertBufferSizeGuard(getCurrentBlock(), g_read_idx + 1);
+    }
 
     // build the conditions
-    std::vector<std::string> conditions;
-    while (currNode != executionTree->getRoot()) {
-      // stop to dump ancestor nodes
-      if (ancestorNodes.count(currNode) != 0)
-        break;
+    qsym::ExprRef expr = leafNode->data.constraint;
+    doDFSPostOrderTraversal(expr);
+    std::string exitCondition(getSymbolFor(expr));
+    if (!leafNode->data.taken)
+      exitCondition = "!(" + exitCondition + ")";
 
-      qsym::ExprRef expr = currNode->data.constraint;
-      doDFSPostOrderTraversal(expr);
-
-      std::string condition(getSymbolFor(expr));
-      if (!currNode->data.taken)
-        condition = "!" + condition;
-      conditions.push_back(condition);
-
-      currNode = currNode->parent;
-    }
-
-    if (conditions.empty()) continue;
-
-    if (leafNode->parent){
-      if (leafNode->parent->left)
-        ancestorNodes.insert(leafNode->parent->left);
-      if (leafNode->parent->right)
-        ancestorNodes.insert(leafNode->parent->right);
-    }
-
-    std::string exitIfCondition;
-    unsigned idx = conditions.size() - 1;
-    for (; idx > 0; idx --)
-      exitIfCondition += conditions[idx] + " && ";
-    exitIfCondition += conditions[idx];
+    if (g_conditions.find(exitCondition) != g_conditions.end())
+      continue;
 
     auto ifStatement = std::make_shared<CXXIfStatement>(
-        getCurrentBlock().get(), exitIfCondition);
+        getCurrentBlock().get(), exitCondition);
     ifStatement->trueBlock = earlyExitBlock;
     ifStatement->falseBlock = nullptr;
     getCurrentBlock()->statements.push_back(ifStatement);
@@ -366,7 +335,6 @@ void TransformPass::dumpEvaluator(const std::string &path){
   } else {
     llvm::errs() << "Failed to open file: " << EC.message() << "\n";
   }
-  llvm::errs() << "[PCT] create new pct-evaluator : "<< path << "\n";
 }
 
 ////////////////////////
@@ -857,21 +825,13 @@ void TransformPass::visitConvertToFloatFromUnsignedBitVector(ExprRef e) {
   std::string eType = "double";
   if (e->bits() == 32)
     eType = "float";
-  std::string argType = getBVTypeStr(arg->bits(), false);
-  ss << "(" << eType << ") " << argType << "(" << getSymbolFor(arg) << ")";
+  ss << "(" << eType << ") " << getSymbolFor(arg);
   insertSSAStmt(e, ss.str());
 }
 
 void TransformPass::visitConvertToFloatFromSignedBitVector(ExprRef e) {
-  auto arg = e->getChild(0);
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  std::string eType = "double";
-  if (e->bits() == 32)
-    eType = "float";
-  std::string argType = getBVTypeStr(arg->bits(), true);
-  ss << "(" << eType << ") " << argType << "(" << getSymbolFor(arg) << ")";
-  insertSSAStmt(e, ss.str());
+  // the same as visitConvertToFloatFromUnsignedBitVector
+  visitConvertToFloatFromUnsignedBitVector(e);
 }
 
 void TransformPass::visitConvertToIEEEBitVectorFromFloat(ExprRef e) {

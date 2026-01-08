@@ -48,15 +48,17 @@ void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
     return;
 
   std::string indent(depth * 2, '-');
-  std::string takenStr = node->data.taken   ? "[T]" : "[F]";
-  std::string isFull   = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
-  std::string status   = node->status == UnReachable ? "[un sat]" :
-                         node->status == WillbeVisit ? "[will vis]" :
-                         node->status == HasVisited  ? "[has vis]" :
+  std::string index   = "[" + std::to_string(depth) + "]";
+  std::string taken   = node->data.taken   ? "[T]" : "[F]";
+  std::string isFull  = isFullyBuilt(node) ? "[FULL]" : "[OOPS]";
+  std::string status  = node->status == UnReachable ? "[un sat]" :
+                        node->status == WillbeVisit ? "[will vis]" :
+                        node->status == HasVisited  ? "[has vis]" :
                          "[diverse]";
 
   std::string constraintStr = node->data.constraint->toString();
-  std::cerr << indent << takenStr << " " << isFull
+  std::cerr << indent << index
+            << taken  << " " << isFull
             << " " << status << " " << constraintStr;
 
   // 打印基本块信息
@@ -88,18 +90,19 @@ void ExecutionTree::printTree(const TreeNode* node, uint32_t depth,
 ////////////////////////
 
 TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
+
   currNode->status = HasVisited;
 
   if (pctNode.taken) { /// left is the true branch
     if (currNode->left) {
       if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
         // if path is divergent, try to rebuild it !
+        currNode->isDiverse = true;
         currNode->left = constructTreeNode(currNode, pctNode);
 
-        std::cerr << "[PCT] left Divergent : "
-                  << currNode->depth << " " << currNode->data.currBB << "\n";
+//        std::cerr << "[PCT] left Divergent : "
+//                  << currNode->depth << " " << currNode->data.currBB << "\n";
         fullCache.clear();
-        divergtNodes.push_back(currNode);
       }
 
       currNode->left->data.taken = true;
@@ -110,10 +113,6 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
     if (!currNode->right) {
       currNode->right = constructTreeNode(currNode, pctNode);
       currNode->right->data.taken = false;
-    }else{
-      // update the input file
-      if (currNode->right->status == WillbeVisit)
-        currNode->right->data.input_file = pctNode.input_file;
     }
 
     currNode = currNode->left;
@@ -121,12 +120,12 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
     if (currNode->right) {
       if (currNode->right->data.constraint->hash() != pctNode.constraint->hash()) {
         // if path is divergent, try to rebuild it !
+        currNode->isDiverse = true;
         currNode->right = constructTreeNode(currNode, pctNode);
 
-        std::cerr << "[PCT] right Divergent : "
-                  << currNode->depth << " " << currNode->data.currBB << "\n";
+//        std::cerr << "[PCT] right Divergent : "
+//                  << currNode->depth << " " << currNode->data.currBB << "\n";
         fullCache.clear();
-        divergtNodes.push_back(currNode);
       }
 
       currNode->right->data.taken = false;
@@ -137,14 +136,11 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
     if (!currNode->left) {
       currNode->left = constructTreeNode(currNode, pctNode);
       currNode->left->data.taken = true;
-    }else{
-      // update the input file
-      if (currNode->left->status == WillbeVisit)
-        currNode->left->data.input_file = pctNode.input_file;
     }
 
     currNode = currNode->right;
   }
+
   currNode->status = HasVisited;
   return currNode;
 }
@@ -166,16 +162,14 @@ std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() {
     if (node->status == WillbeVisit)
       willbeVisited.push_back(node);
 
-    if (node->left)
-      worklist.push(node->left);
-    if (node->right)
-      worklist.push(node->right);
+    if (node->left)  worklist.push(node->left);
+    if (node->right) worklist.push(node->right);
   }
 
   return willbeVisited;
 }
 
-std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(uint32_t depth) {
+std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
   std::vector<TreeNode*> hasVisited;
   if (!root) return hasVisited;
 
@@ -186,7 +180,8 @@ std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(uint32_t depth) {
     TreeNode* node = worklist.front();
     worklist.pop();
 
-    if (node->depth > depth)
+    if (node->depth > depth ||
+        node->isDiverse)
       continue;
 
     if (isFullyBuilt(node)){
@@ -203,63 +198,72 @@ std::vector<TreeNode *> ExecutionTree::getHasVisitedLeafNodes(uint32_t depth) {
 }
 
 std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
-  int LeftSize = N;
-  std::vector<TreeNode*> willbeVisited;
-  std::set<uint32_t> selectNodesIDs;
-
   // re-compute the tobe visited nodes
   std::vector<TreeNode *> allNodes = getWillBeVisitedNodes();
-  if ((int)allNodes.size() < LeftSize)
+  size_t total = allNodes.size();
+  if (total < N)
     return allNodes;
 
-  // extract equality nodes
-  std::map<uint32_t, uint32_t> selectBBCnt;
-  while (LeftSize > 0){
-    selectBBCnt.clear();
-    for (auto node : allNodes){
-      uint32_t BBID = node->data.currBB;
-      if (selectNodesIDs.count(node->id) == 0 &&
-          selectBBCnt[BBID] < BBWeight[BBID] + 1){
-        // if a BB is more weight, give more chance to it !
-        willbeVisited.push_back(node);
-        selectNodesIDs.insert(node->id);
-
-        selectBBCnt[BBID] ++;
-
-        LeftSize --;
-        if (LeftSize == 0) return willbeVisited;
-      }
-    }
+  // Step 1: 按 depth 分组，同一 depth 内保持原始顺序（或可排序）
+  std::map<uint32_t, std::vector<TreeNode*>> depthGroups;
+  for (auto node : allNodes) {
+    depthGroups[node->depth].push_back(node);
   }
 
-  return willbeVisited;
+  // 可选：对每个 depth 组内部按 id 排序，确保确定性
+  for (auto& pair : depthGroups) {
+    std::sort(pair.second.begin(), pair.second.end(),
+              [](TreeNode* a, TreeNode* b) {
+                return a->id < b->id; // 或其他稳定排序依据
+              });
+  }
+
+  // Step 2: round-robin 采样
+  std::vector<TreeNode*> result;
+  result.reserve(N);
+
+  // 记录每个 depth 下一次要取的索引（初始为 0）
+  std::map<uint32_t, size_t> nextIndex;
+  for (const auto& pair : depthGroups) {
+    nextIndex[pair.first] = 0;
+  }
+
+  // 持续采样直到取满 N 个
+  while (result.size() < N) {
+    bool madeProgress = false;
+    // 遍历所有 depth（按升序：浅→深；若想优先深，可用 rbegin/rend）
+    for (const auto& pair : depthGroups) {
+      uint32_t depth = pair.first;
+      const auto& nodes = pair.second;
+      size_t& idx = nextIndex[depth];
+
+      if (idx < nodes.size()) {
+        result.push_back(nodes[idx]);
+        idx++;
+        madeProgress = true;
+
+        if (result.size() >= N) break;
+      }
+    }
+
+    // 如果一轮下来一个都没取到，说明已无更多节点
+    if (!madeProgress) break;
+  }
+
+  return result;
 }
 
 std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode){
   std::vector<qsym::ExprRef> constraints;
+
   auto currNode = srcNode;
   while (currNode != getRoot()) {
     qsym::ExprRef expr = currNode->data.constraint;
+
     if (!currNode->data.taken)
       expr = g_expr_builder->createLNot(expr);
     constraints.push_back(expr);
-    currNode = currNode->parent;
-  }
-  return constraints;
-}
 
-std::vector<qsym::ExprRef> ExecutionTree::getRelaConstraints(
-    const TreeNode *srcNode, std::set<trace> *relaBranchTraces){
-  std::vector<qsym::ExprRef> constraints;
-  auto currNode = srcNode;
-  while (currNode != getRoot()) {
-    trace tobeTrace = getTrace(currNode);
-    if (relaBranchTraces->count(tobeTrace)){
-      qsym::ExprRef expr = currNode->data.constraint;
-      if (!currNode->data.taken)
-        expr = g_expr_builder->createLNot(expr);
-      constraints.push_back(expr);
-    }
     currNode = currNode->parent;
   }
   return constraints;
@@ -270,6 +274,8 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
   assert(node->status == WillbeVisit);
 
   std::vector<qsym::ExprRef> constraints = getConstraints(node);
+
+//  std::cerr << "[" << constraints.size() << ", " << node->depth << "]\n";
 
   g_solver->reset();
   g_solver->setInputFile(input_file);

@@ -35,6 +35,7 @@ public:
   T data;
 
   NodeStatus status = WillbeVisit;
+  bool isDiverse = false;
   uint32_t id = 0, depth = 0;
 
   Node() : parent(NULL), left(NULL), right(NULL) {
@@ -43,8 +44,8 @@ public:
     right = NULL;
   }
 
-  Node(T data, Node<T> *parent, Node<T> *left, Node<T> *right) :
-      parent(parent), left(left), right(right), data(data) {
+  Node(Node<T> *parent, T data) :
+      parent(parent), left(NULL), right(NULL), data(data) {
     depth = parent->depth + 1;
     id = g_id;
     g_id ++;
@@ -78,8 +79,6 @@ typedef Node<PCTNode> TreeNode;
 
 class ExecutionTree {
 public:
-  std::vector<TreeNode *> divergtNodes;
-
   ExecutionTree(qsym::Solver *solver,
                 qsym::ExprBuilder *expr_builder,
                 SearchStrategy *searcher) :
@@ -92,6 +91,10 @@ public:
 
   int getLeftNodeSize() {
     return static_cast<int>(getWillBeVisitedNodes().size());
+  }
+
+  bool isExceptTerminal(TreeNode *node){
+    return !(node->data.constraint->kind() == qsym::Equal && node->data.taken);
   }
 
   bool updateCovTrace(trace& newVis) {
@@ -111,14 +114,14 @@ public:
   TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
 
   static TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
-    return new Node<PCTNode>(std::move(n), parent, nullptr, nullptr);
+    return new Node<PCTNode>(parent, std::move(n));
   }
 
   // Export all unvisited leaf nodes
   std::vector<TreeNode *> getWillBeVisitedNodes();
 
   // Export all visited leaf nodes with a depth within N
-  std::vector<TreeNode *> getHasVisitedLeafNodes(uint32_t depth);
+  std::vector<TreeNode *> selectTerminalNodes(uint32_t depth);
 
   std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
 
