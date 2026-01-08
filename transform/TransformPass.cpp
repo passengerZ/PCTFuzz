@@ -291,28 +291,65 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
   auto fuzzFn = buildEntryPoint();
   entryPointMainBlock = fuzzFn->defn;
 
-  uint32_t g_read_idx = 0;
-  std::set<std::string> g_conditions;
+  uint32_t g_read_idx = 0, curr_read_idx = 0, curr_read_max = 0;
+
   // Generate constraint branches
+  std::set<TreeNode *> ancestorNodes;
   for (TreeNode *leafNode : terminalNodes){
-    uint32_t maxReadID = findReadIdx(leafNode->data.constraint);
-    if (maxReadID > g_read_idx){
-      g_read_idx = maxReadID;
+    auto currNode = leafNode;
+
+    curr_read_max = 0;
+    while (currNode != executionTree->getRoot()) {
+      // stop to dump ancestor nodes
+      if (ancestorNodes.count(currNode) != 0)
+        break;
+
+      curr_read_idx = findReadIdx(currNode->data.constraint);
+      if (curr_read_idx > curr_read_max)
+        curr_read_max = curr_read_idx;
+      currNode = currNode->parent;
+    }
+    if (curr_read_max > g_read_idx){
+      g_read_idx = curr_read_max;
       insertBufferSizeGuard(getCurrentBlock(), g_read_idx + 1);
     }
 
     // build the conditions
-    qsym::ExprRef expr = leafNode->data.constraint;
-    doDFSPostOrderTraversal(expr);
-    std::string exitCondition(getSymbolFor(expr));
-    if (!leafNode->data.taken)
-      exitCondition = "!(" + exitCondition + ")";
+    currNode = leafNode;
+    std::vector<std::string> conditions;
+    while (currNode != executionTree->getRoot()) {
+      // stop to dump ancestor nodes
+      if (ancestorNodes.count(currNode) != 0)
+        break;
 
-    if (g_conditions.find(exitCondition) != g_conditions.end())
-      continue;
+      qsym::ExprRef expr = currNode->data.constraint;
+      doDFSPostOrderTraversal(expr);
+
+      std::string condition(getSymbolFor(expr));
+      if (!currNode->data.taken)
+        condition = "!" + condition;
+      conditions.push_back(condition);
+
+      currNode = currNode->parent;
+    }
+
+    if (conditions.empty()) continue;
+
+    if (leafNode->parent){
+      if (leafNode->parent->left)
+        ancestorNodes.insert(leafNode->parent->left);
+      if (leafNode->parent->right)
+        ancestorNodes.insert(leafNode->parent->right);
+    }
+
+    std::string exitIfCondition;
+    unsigned idx = conditions.size() - 1;
+    for (; idx > 0; idx --)
+      exitIfCondition += conditions[idx] + " && ";
+    exitIfCondition += conditions[idx];
 
     auto ifStatement = std::make_shared<CXXIfStatement>(
-        getCurrentBlock().get(), exitCondition);
+        getCurrentBlock().get(), exitIfCondition);
     ifStatement->trueBlock = earlyExitBlock;
     ifStatement->falseBlock = nullptr;
     getCurrentBlock()->statements.push_back(ifStatement);

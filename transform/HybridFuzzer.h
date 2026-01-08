@@ -291,7 +291,7 @@ public:
     for (const auto& entry : fs::directory_iterator(dir)) {
       if (entry.is_regular_file() &&
           seen.find(entry.path()) == seen.end() &&
-          starts_with(entry.path().filename().string(), "id:")) {
+          starts_with(entry.path().filename().string(), "id:0")) {
         candidates.push_back(entry.path());
       }
     }
@@ -502,18 +502,18 @@ struct Stats {
 
   void log(std::ostream& out) const {
     out << "Successful executions: " << total_count << "\n";
-    out << "Time in successful executions: " << total_time.count() << "ms\n";
+    out << "Time in successful executions: " << total_time.count() / 1000000 << "s\n";
 
     if (total_count > 0) {
       auto avg = total_time / total_count;
-      out << "Avg time per successful execution: " << avg.count() << "ms\n";
+      out << "Avg time per successful execution: " << avg.count() / 1000000<< "s\n";
     }
 
     out << "Failed executions: " << failed_count << "\n";
-    out << "Time spent on failed executions: " << failed_time.count() << "ms\n";
+    out << "Time spent on failed executions: " << failed_time.count() / 1000000 << "s\n";
     if (failed_count > 0) {
       auto avg_fail = failed_time / failed_count;
-      out << "Avg time in failed executions: " << avg_fail.count() << "ms\n";
+      out << "Avg time in failed executions: " << avg_fail.count() / 1000000 << "s\n";
     }
 
     out << "--------------------------------------------------------------------------------\n"
@@ -558,19 +558,22 @@ public:
     if (result.killed) {
       std::cerr << "The target process was killed (probably timeout or OOM); archiving to "
                 << hangs.path.string() << "\n";
-      copy_testcase_to_dir(input, hangs);
+      copy_testcase_to_dir(input, hangs, false);
     }
     processed_seeds.insert(input);
     stats.add_execution(result);
     return result.constraint_file;
   }
 
-  fs::path copy_testcase_to_dir(const fs::path& src, TestcaseDir& dest) {
+  fs::path copy_testcase_to_dir(
+      const fs::path& src, TestcaseDir& dest, bool isCovNew) {
     // 格式化新文件名：id:{:06},src:{}
     std::ostringstream oss;
-    oss << "id:" << std::setw(6) << std::setfill('0') << dest.current_id
-        << ",src:" << std::setw(6) << std::setfill('0') << 0
-        << ",op:pct,+cov";
+    uint32_t newID = 900000 + dest.current_id;
+    oss << "id:" << std::setw(6) << std::setfill('0') << newID
+        << ",op:pct";
+    if (isCovNew)
+      oss << ",+cov";
     std::string new_name = oss.str();
     fs::path target = dest.path / new_name;
 
@@ -598,8 +601,8 @@ public:
     case AflShowmapResultKind::Success: {
       bool interesting = current_bitmap.merge(showmap_res.map);
       if (interesting && !isFromFuzzer) {
-        fs::path newCase = copy_testcase_to_dir(testcase, queue);
-        std::cerr << "[PCT] New Covnew Testcase : " << newCase.string() << "\n";
+        fs::path newCase = copy_testcase_to_dir(testcase, queue, true);
+        std::cerr << "[PCT] Covnew : " << newCase.string() << "\n";
         return TestcaseResult::New;
       }
       return TestcaseResult::Uninteresting;
@@ -609,8 +612,8 @@ public:
       return TestcaseResult::Hang;
     case AflShowmapResultKind::Crash:{
       if (!isFromFuzzer){
-        copy_testcase_to_dir(testcase, crashes);
-        fs::path newCase = copy_testcase_to_dir(testcase, queue);
+        copy_testcase_to_dir(testcase, crashes, false);
+        fs::path newCase = copy_testcase_to_dir(testcase, queue, true);
         std::cerr << "[PCT] New Crash Testcase : " << newCase.string() << "\n";
       }
       return TestcaseResult::Crash;
