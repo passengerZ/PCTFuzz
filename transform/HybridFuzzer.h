@@ -534,14 +534,14 @@ public:
   fs::path evaluator_file;
   std::chrono::steady_clock::time_point last_stats_output;
 
-  static State initialize(const fs::path& output_dir, const fs::path& fuzzer_output) {
+  static State initialize(const fs::path& output_dir) {
     fs::create_directory(output_dir);
     return State{
         .current_bitmap = AflMap{},
         .processed_seeds = {},
-        .queue      = TestcaseDir{fuzzer_output / "queue"},
-        .hangs      = TestcaseDir{fuzzer_output / "hangs"},
-        .crashes    = TestcaseDir{fuzzer_output / "crashes"},
+        .queue      = TestcaseDir{output_dir / "queue"},
+        .hangs      = TestcaseDir{output_dir / "hangs"},
+        .crashes    = TestcaseDir{output_dir / "crashes"},
         .conditions = TestcaseDir{output_dir / "conditions"},
         .seen       = TestcaseDir{output_dir / "seen"},
         .solved     = TestcaseDir{output_dir / "solved"},
@@ -569,8 +569,7 @@ public:
       const fs::path& src, TestcaseDir& dest, bool isCovNew) {
     // 格式化新文件名：id:{:06},src:{}
     std::ostringstream oss;
-    uint32_t newID = 900000 + dest.current_id;
-    oss << "id:" << std::setw(6) << std::setfill('0') << newID
+    oss << "id:" << std::setw(6) << std::setfill('0') << dest.current_id
         << ",op:pct";
     if (isCovNew)
       oss << ",+cov";
@@ -582,7 +581,8 @@ public:
     } catch (const fs::filesystem_error& e) {
       std::cerr << "Failed to copy the test case from ["
                 << src.string() << "] to ["
-                << dest.path.string() << "] :" << e.what() << "\n";
+                << dest.path.string() << "] : " << e.what() << "\n";
+      return "";
     }
 
     dest.current_id++;

@@ -286,11 +286,10 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
   std::string new_case = g_solver->fetchTestcase();
 
   // No Solution, set the node status to UNSAT
-  // SAT, record the testcase
+  // SAT, record the testcase,
+  // NOTE ! the HasVisited must set in UPDATETREE
   if (new_case.empty())
     node->status = UnReachable;
-  else
-    node->status = HasVisited;
 
   return new_case;
 }

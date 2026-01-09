@@ -137,8 +137,7 @@ public:
   steady_clock::time_point last_stats_output = steady_clock::now();
   std::ofstream stats_file;
 
-  static std::optional<State> initialize(const fs::path& output_dir,
-                                         const fs::path& fuzzer_output) {
+  static std::optional<State> initialize(const fs::path& output_dir) {
     std::error_code ec;
 
     if (!fs::create_directory(output_dir, ec) && ec) {
@@ -146,9 +145,9 @@ public:
       return std::nullopt;
     }
 
-    auto queue_dir   = fuzzer_output / "queue";
-    auto hangs_dir   = fuzzer_output / "hangs";
-    auto crashes_dir = fuzzer_output / "crashes";
+    auto queue_dir   = output_dir / "queue";
+    auto hangs_dir   = output_dir / "hangs";
+    auto crashes_dir = output_dir / "crashes";
     auto stats_path  = output_dir / "stats";
 
     auto q = TestcaseDir(queue_dir);
@@ -173,37 +172,24 @@ public:
     };
   }
 
-  bool create_temp_dir(fs::path& out_temp_dir) {
-    // 获取系统临时目录（如 /tmp）
-    const char* tmpdir = std::getenv("TMPDIR");
-    if (!tmpdir) tmpdir = "/tmp";
-
-    // 构造模板：必须以 "XXXXXX" 结尾（6个大写X）
-    std::string pattern = fs::path(tmpdir) / "symcc-XXXXXX";
-
-    // mkdtemp 要求传入可修改的 char*，所以不能用 string.c_str()
-    std::vector<char> buffer(pattern.begin(), pattern.end());
-    buffer.push_back('\0'); // 确保以 null 结尾
-
-    char* result = mkdtemp(buffer.data());
-    if (result == nullptr) {
-      perror("mkdtemp failed");
-      return false;
-    }
-
-    out_temp_dir = fs::path(result);
-    return true;
-  }
-
   bool test_input(const fs::path& input, const SymCC& symcc, const AflConfig& afl_config) {
     std::cerr << "Running on input " << input << "\n";
 
-    auto tmp_dir = fs::temp_directory_path() / "symcc_temp";
-    if (!fs::create_directories(tmp_dir)) {
-      if (!(fs::exists(tmp_dir) && fs::is_directory(tmp_dir))) {
-        std::cerr << "Failed to create temp directory: " << tmp_dir << "\n";
+    fs::path tmp_dir;
+    {
+      const char* tmpdir_env = std::getenv("TMPDIR");
+      std::string tmp_base = tmpdir_env ? tmpdir_env : "/tmp";
+      std::string pattern = fs::path(tmp_base) / "symcc-XXXXXX";
+
+      std::vector<char> buffer(pattern.begin(), pattern.end());
+      buffer.push_back('\0');
+
+      char* result = mkdtemp(buffer.data());
+      if (!result) {
+        std::cerr << "Failed to create unique temp directory: " << strerror(errno) << "\n";
         return false;
       }
+      tmp_dir = fs::path(result);
     }
 
     auto cleanup = [&tmp_dir]() {
@@ -302,7 +288,7 @@ int main(int argc, char* argv[]) {
 
   fs::path fuzzer_output = output_dir / fuzzer_name_str;
   auto afl_config = AflConfig::load(fuzzer_output);
-  auto state = State::initialize(symcc_dir, fuzzer_output);
+  auto state = State::initialize(symcc_dir);
 
   std::vector<std::string> symcc_command(afl_config.target_command);
   symcc_command[0] = SymCCTargetBin.c_str();

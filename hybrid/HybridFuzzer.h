@@ -374,7 +374,6 @@ public:
       TestcaseDir& target_dir,
       const fs::path& parent
   ) {
-    // 获取父测试用例的文件名
     auto parent_filename = parent.filename();
     if (parent_filename.empty()) {
       throw std::invalid_argument("The input file does not have a name");
@@ -382,16 +381,15 @@ public:
 
     std::string orig_name = parent_filename.string();
 
-    // 检查是否以 "id:" 开头
+    // starts with "id:"
     if (orig_name.find("id:") != 0)
       return;
 
     std::string orig_id = orig_name.substr(3, 6); // [3, 9)
 
-    // 生成新名称：id:{:06},src:{orig_id}
+    // id:{:06},src:{orig_id}
     char buffer[64];
-    uint32_t newID = 900000 + target_dir.current_id;
-    snprintf(buffer, sizeof(buffer), "id:%06u,src:%s", newID, orig_id.c_str());
+    snprintf(buffer, sizeof(buffer), "id:%06u,src:%s", target_dir.current_id, orig_id.c_str());
     std::string new_name(buffer);
 
     fs::path target = target_dir.path / new_name;

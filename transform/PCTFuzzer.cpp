@@ -273,6 +273,8 @@ unsigned execute_fuzzer(
   // avoid symcc to failed open afl-busy seed
   fs::path currInput = state->copy_testcase_to_dir(input, state->seen, false);
   input = currInput.string();
+  if (input.empty())
+    return 0;
 
   fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
   qsym::updatePCTree(pct_file, input);
@@ -395,7 +397,7 @@ int main (int argc, char* argv[]){
   symcc_command[0] = SymCCTargetBin.c_str();
   SymCC symcc(symcc_dir, symcc_command);
 
-  auto state = State::initialize(symcc_dir, fuzzer_output);
+  auto state = State::initialize(symcc_dir);
 
   qsym::g_z3_context = new z3::context{};
   qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, ""); // for QSYM-internal use
@@ -405,17 +407,14 @@ int main (int argc, char* argv[]){
 
   auto start_time = std::chrono::steady_clock::now();
   auto last_new_afl_time = start_time;
-  auto last_afl_stop_time  = start_time;
   auto last_evaluator_time = start_time;
   unsigned consecutive_empty_rounds = 0;
 
-  uint32_t PollInterval = 1;
+  uint32_t PollInterval = 2;
   uint32_t NoNewTimeoutSec = 5;
-  uint32_t MaxEmptyRounds = 1;
-//  uint32_t MaxGeneratedSeeds = 64;
+  uint32_t MaxEmptyRounds = 2;
   uint32_t BatchSeedSize = 64;
   uint32_t EvaluatorTimeLimitSec = 30;
-  uint32_t AFLSeedSyncTimeSec = 60;
 
   bool hasCovNew = false;
   while (true) {
@@ -426,14 +425,13 @@ int main (int argc, char* argv[]){
 
     auto now = std::chrono::steady_clock::now();
 
-    if (covnew_seeds.empty() && curr_depth < MAX_DEPTH) {
+    if (covnew_seeds.empty()) {
       consecutive_empty_rounds++;
       bool timeout_no_new = (std::chrono::duration_cast<std::chrono::seconds>(
           now - last_new_afl_time).count() >= NoNewTimeoutSec);
       bool too_many_empty = (consecutive_empty_rounds >= MaxEmptyRounds);
 
       if (timeout_no_new || too_many_empty) {
-        // === 触发 SMT 求解 ===
         std::vector<TreeNode*> tobeExplore =
             executionTree->selectWillBeVisitedNodes(BatchSeedSize);
 
@@ -441,7 +439,6 @@ int main (int argc, char* argv[]){
         std::cerr << "[PCT] SMT Selected " << tobeExplore.size() << " nodes, Now testcases is "
                   << state.solved.current_id <<".\n";
 
-        // 重置计数器
         consecutive_empty_rounds = 0;
         PollInterval ++;
         MaxEmptyRounds ++;
@@ -453,28 +450,18 @@ int main (int argc, char* argv[]){
         // by the way to compute evaluator
         bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
             now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
-        if (evaluator_limit){
+        if (evaluator_limit && curr_depth < MAX_DEPTH){
           last_evaluator_time = now;
 
           // step (4) : dump the visited leaf node to build failed pass
           if (build_pct_evaluator(&state)){
-            EvaluatorTimeLimitSec += 10;
-            if (EvaluatorTimeLimitSec > 60)
-              EvaluatorTimeLimitSec = 30;
+            if (EvaluatorTimeLimitSec < 60)
+              EvaluatorTimeLimitSec += 10;
 
             std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
-            last_afl_stop_time = now;
           }
         }
 
-      }
-
-      bool seed_sync_time = (std::chrono::duration_cast<std::chrono::seconds>(
-          now - last_afl_stop_time).count() >= AFLSeedSyncTimeSec);
-      if (hasCovNew && seed_sync_time){
-        std::cerr << "[STOP AFL]" << std::endl;
-        hasCovNew = false;
-        last_afl_stop_time = now;
       }
 
       continue;
