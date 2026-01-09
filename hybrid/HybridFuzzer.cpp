@@ -204,7 +204,6 @@ public:
       num_total++;
       if (res == TestcaseResult::New) {
         num_interesting++;
-        SymCC::copy_testcase(input, queue, input);
       }
     }
 

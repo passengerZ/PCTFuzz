@@ -276,9 +276,12 @@ unsigned execute_fuzzer(
   if (input.empty())
     return 0;
 
-  fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
-  qsym::updatePCTree(pct_file, input);
-  remove_file(pct_file);
+  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config);
+  qsym::updatePCTree(symccRes.constraint_file, input);
+
+  for (const auto& new_test : symccRes.test_cases)
+    state->evaluate_new_testcase(
+        new_test, symcc->work_dir, *afl_config, false);
 
   // save covnew input
   TestcaseResult res = state->evaluate_new_testcase(
@@ -289,9 +292,8 @@ unsigned execute_fuzzer(
 unsigned execute_dse(
     std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
 
-  fs::path pct_file = state->concolic_execution(input, *symcc, *afl_config);
-  qsym::updatePCTree(pct_file, input);
-  remove_file(pct_file);
+  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config);
+  qsym::updatePCTree(symccRes.constraint_file, input);
 
   // save covnew input
   TestcaseResult res = state->evaluate_new_testcase(
@@ -411,9 +413,9 @@ int main (int argc, char* argv[]){
   unsigned consecutive_empty_rounds = 0;
 
   uint32_t PollInterval = 2;
-  uint32_t NoNewTimeoutSec = 5;
   uint32_t MaxEmptyRounds = 2;
   uint32_t BatchSeedSize = 64;
+  uint32_t NoNewTimeoutSec = 20;
   uint32_t EvaluatorTimeLimitSec = 30;
 
   bool hasCovNew = false;
@@ -442,8 +444,8 @@ int main (int argc, char* argv[]){
         consecutive_empty_rounds = 0;
         PollInterval ++;
         MaxEmptyRounds ++;
-        if (PollInterval > 3) PollInterval = 1;
-        if (MaxEmptyRounds > 3) MaxEmptyRounds = 1;
+        if (PollInterval > 10) PollInterval = 1;
+        if (MaxEmptyRounds > 10) MaxEmptyRounds = 1;
 
         last_new_afl_time = now; // 视为有“活动”
 

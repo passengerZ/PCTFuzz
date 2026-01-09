@@ -45,40 +45,6 @@ bool starts_with(const std::string& str, const std::string& prefix) {
   return str.compare(0, prefix.size(), prefix) == 0;
 }
 
-bool is_under_directory(const std::string& file_path_str, const fs::path& base_dir) {
-  fs::path file_path = fs::absolute(file_path_str);
-  fs::path base = fs::absolute(base_dir);
-
-  file_path = fs::weakly_canonical(file_path);
-  base = fs::weakly_canonical(base);
-
-  if (file_path.string().length() > base.string().length() &&
-      file_path.string().substr(0, base.string().length()) == base) {
-    return true;
-  }
-
-  return false;
-}
-
-std::vector<fs::path> get_pct_solution(fs::path& dir) {
-  std::vector<fs::path> result;
-
-  if (!fs::exists(dir) || !fs::is_directory(dir)) {
-    return result;
-  }
-
-  for (const auto& entry : fs::directory_iterator(dir)) {
-    if (entry.is_regular_file()) {
-      const std::string filename = entry.path().filename().string();
-      if (filename.substr(0, 4) == "pct_") {
-        result.push_back(entry.path());
-      }
-    }
-  }
-
-  return result;
-}
-
 std::vector<std::string> insert_input_file(const std::vector<std::string>& command,
                                            const fs::path& input_file) {
   std::vector<std::string> fixed = command;
@@ -97,6 +63,24 @@ inline bool remove_file(const fs::path& p) {
   }
   std::error_code ec;
   return fs::remove(p, ec);
+}
+
+bool clear_directory(const fs::path& dir) {
+  std::error_code ec;
+
+  fs::remove_all(dir, ec);
+  if (ec && ec != std::errc::no_such_file_or_directory) {
+    std::cerr << "Error removing directory " << dir << ": " << ec.message() << "\n";
+    return false;
+  }
+
+  fs::create_directory(dir, ec);
+  if (ec) {
+    std::cerr << "Error recreating directory " << dir << ": " << ec.message() << "\n";
+    return false;
+  }
+
+  return true;
 }
 
 // ----------------------------
@@ -298,6 +282,24 @@ public:
     return candidates;
   }
 
+  std::optional<fs::path> best_new_testcase(const std::set<fs::path>& seen) {
+    std::vector<fs::path> candidates;
+    for (const auto& entry : fs::directory_iterator(queue)) {
+      if (entry.is_regular_file() && seen.find(entry.path()) == seen.end()) {
+        candidates.push_back(entry.path());
+      }
+    }
+
+    if (candidates.empty()) return std::nullopt;
+
+    fs::path best = *std::max_element(candidates.begin(), candidates.end(),
+                                      [](const fs::path& a, const fs::path& b) {
+                                        return TestcaseScore::new_score(a) < TestcaseScore::new_score(b);
+                                      });
+
+    return best;
+  }
+
   AflShowmapResult run_showmap(const fs::path& testcase_bitmap, const fs::path& testcase) const {
     std::vector<std::string> args = {"timeout", "-k", "5", std::to_string(TIMEOUT), show_map.string()};
 //    if (use_qemu_mode)
@@ -380,6 +382,7 @@ public:
 // SymCCResult
 // ----------------------------
 struct SymCCResult {
+  std::vector<fs::path> test_cases;
   fs::path constraint_file;
   bool killed;
   std::chrono::microseconds total_time;
@@ -470,10 +473,24 @@ public:
 
     //std::cerr << "[zgf dbg] symcc output : " << stderr_output << "\n";
 
+    // Collect test cases
+    std::vector<fs::path> test_cases;
+    if (fs::exists(output_dir)) {
+      for (const auto& entry : fs::directory_iterator(output_dir)) {
+        if (entry.is_regular_file()) {
+          if (entry.path().extension() != ".pct") {
+            test_cases.push_back(entry.path());
+            std::cerr << "[zgf dbg] test_case : " << entry.path().string() << "\n";
+          }
+        }
+      }
+    }
+
     fs::path constriant_path = output_dir / "000001.pct";
     auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(total_time);
 
     return SymCCResult{
+        test_cases,
         constriant_path,
         killed,
         total_us
@@ -528,7 +545,7 @@ class State {
 public:
   AflMap current_bitmap;
   std::set<fs::path> processed_seeds;
-  TestcaseDir queue, hangs, crashes, conditions, seen, solved;
+  TestcaseDir queue, hangs, crashes, oneout, seen, solved;
   Stats stats;
   std::ofstream stats_file;
   fs::path evaluator_file;
@@ -542,7 +559,7 @@ public:
         .queue      = TestcaseDir{output_dir / "queue"},
         .hangs      = TestcaseDir{output_dir / "hangs"},
         .crashes    = TestcaseDir{output_dir / "crashes"},
-        .conditions = TestcaseDir{output_dir / "conditions"},
+        .oneout     = TestcaseDir{output_dir / "oneout"},
         .seen       = TestcaseDir{output_dir / "seen"},
         .solved     = TestcaseDir{output_dir / "solved"},
         .stats      = {},
@@ -552,9 +569,11 @@ public:
     };
   }
 
-  fs::path concolic_execution(
+  SymCCResult concolic_execution(
       const fs::path& input, SymCC& symcc, const AflConfig& afl_config) {
-    auto result = symcc.run(input, conditions.path);
+    clear_directory(oneout.path);
+
+    auto result = symcc.run(input, oneout.path);
     if (result.killed) {
       std::cerr << "The target process was killed (probably timeout or OOM); archiving to "
                 << hangs.path.string() << "\n";
@@ -562,7 +581,7 @@ public:
     }
     processed_seeds.insert(input);
     stats.add_execution(result);
-    return result.constraint_file;
+    return result;
   }
 
   fs::path copy_testcase_to_dir(

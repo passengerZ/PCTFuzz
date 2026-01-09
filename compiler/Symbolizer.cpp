@@ -446,7 +446,7 @@ void Symbolizer::visitSelectInst(SelectInst &I) {
   auto runtimeCall = buildRuntimeCall(IRB, runtime.pushPathConstraint,
                                       {{I.getCondition(), true},
                                        {I.getCondition(), false},
-                                       {BBID, false},
+                                       {getTargetPreferredInt(&I), false},
                                        {BBID, false},
                                        {BBID, false}});
   registerSymbolicComputation(runtimeCall);
@@ -506,7 +506,7 @@ void Symbolizer::visitBranchInst(BranchInst &I) {
       IRB, runtime.pushPathConstraint,
       {{I.getCondition(), true},
        {I.getCondition(), false},
-       {getBBID(reinterpret_cast<uint64_t>(I.getParent())), false},
+       {getTargetPreferredInt(&I), false},
        {getBBID(reinterpret_cast<uint64_t>(I.getSuccessor(0))), false},
        {getBBID(reinterpret_cast<uint64_t>(I.getSuccessor(1))), false}
       });
@@ -952,8 +952,7 @@ void Symbolizer::visitSwitchInst(SwitchInst &I) {
 
     IRB.CreateCall(
         runtime.pushPathConstraint,
-        {caseConstraint, caseTaken,
-         getBBID(reinterpret_cast<uint64_t>(I.getParent())),
+        {caseConstraint, caseTaken, getTargetPreferredInt(&I),
          getBBID(reinterpret_cast<uint64_t>(caseHandle.getCaseSuccessor())),
          getBBID(reinterpret_cast<uint64_t>(falseBranch))
         });
@@ -1120,22 +1119,19 @@ Symbolizer::SymbolicComputation Symbolizer::forceBuildRuntimeCall(
 }
 
 void Symbolizer::tryAlternative(IRBuilder<> &IRB, Value *V) {
-//  auto *destExpr = getSymbolicExpression(V);
-//  if (destExpr != nullptr) {
-//    auto *concreteDestExpr = createValueExpression(V, IRB);
-//    auto *destAssertion =
-//        IRB.CreateCall(runtime.comparisonHandlers[CmpInst::ICMP_EQ],
-//                       {destExpr, concreteDestExpr});
-//    auto BBID = llvm::ConstantInt::get(intPtrType, -1);
-//    auto *pushAssertion = IRB.CreateCall(
-//        runtime.pushPathConstraint,
-//        {destAssertion, IRB.getInt1(true), BBID, BBID, BBID});
-//    registerSymbolicComputation(SymbolicComputation(
-//        concreteDestExpr, pushAssertion, {Input(V, 0, destAssertion)}));
-//  }
-
-    if(V->hasName() && IRB.getIsFPConstrained())
-      llvm::errs();
+  auto *destExpr = getSymbolicExpression(V);
+  if (destExpr != nullptr) {
+    auto *concreteDestExpr = createValueExpression(V, IRB);
+    auto *destAssertion =
+        IRB.CreateCall(runtime.comparisonHandlers[CmpInst::ICMP_EQ],
+                       {destExpr, concreteDestExpr});
+    auto BBID = llvm::ConstantInt::get(intPtrType, -1);
+    auto *pushAssertion = IRB.CreateCall(
+        runtime.pushPathConstraint,
+        {destAssertion, IRB.getInt1(true), getTargetPreferredInt(V), BBID, BBID});
+    registerSymbolicComputation(SymbolicComputation(
+        concreteDestExpr, pushAssertion, {Input(V, 0, destAssertion)}));
+  }
 }
 
 uint64_t Symbolizer::aggregateMemberOffset(Type *aggregateType,

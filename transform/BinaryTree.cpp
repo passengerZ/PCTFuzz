@@ -159,7 +159,7 @@ std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() {
     if (isFullyBuilt(node))
       continue;
 
-    if (node->status == WillbeVisit)
+    if (node->status == WillbeVisit && node != root)
       willbeVisited.push_back(node);
 
     if (node->left)  worklist.push(node->left);

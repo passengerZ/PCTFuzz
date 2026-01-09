@@ -406,8 +406,12 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id,
                                uintptr_t left_id,
                                uintptr_t right_id) {
-  if (constraint == nullptr || constraint->isBool() ||
-      branchConstaints.size() > 200)
+  if (constraint == nullptr || constraint->isBool())
+    return;
+
+  g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
+
+  if (branchConstaints.size() > 300)
     return;
 
   // if the constraint is same as prev, do not collect
@@ -415,9 +419,10 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
       constraint->hash() == branchConstaints.back().constraint->hash() &&
       taken == branchConstaints.back().taken)
     return;
-  BranchNode bNode(constraint, taken, site_id, left_id, right_id);
+
+  std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n";
+  BranchNode bNode(constraint, taken, currBB, left_id, right_id);
   branchConstaints.push_back(bNode);
-  //g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 }
 
 SymExpr _sym_get_input_byte(size_t offset, uint8_t value) {

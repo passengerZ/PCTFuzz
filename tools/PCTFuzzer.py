@@ -11,9 +11,9 @@ from multiprocessing import Pool
 
 afl_fuzz       = "/home/aaa/FPCT/AFLplusplus/afl-fuzz"
 afl_compiler   = "/home/aaa/FPCT/AFLplusplus/afl-clang-lto"
-symcc_compiler = "/home/aaa/FPCT/PCTFuzz/cmake-build-debug/symcc"
 
-pctfuzzer_bin  = "/home/aaa/FPCT/PCTFuzz/cmake-build-debug/transform/PCTFuzzer"
+symcc_compiler = "/home/aaa/FPCT/PCTFuzz/build/symcc"
+pctfuzzer_bin  = "/home/aaa/FPCT/PCTFuzz/build/transform/PCTFuzzer"
 
 class PCTFuzzer:
     def __init__(self, project_name, project_dir, binary_name, build_cmd, clean_cmd, input_args, work_dir, time_out):

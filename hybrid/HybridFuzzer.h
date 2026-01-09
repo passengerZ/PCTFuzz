@@ -389,7 +389,7 @@ public:
 
     // id:{:06},src:{orig_id}
     char buffer[64];
-    snprintf(buffer, sizeof(buffer), "id:%06u,src:%s", target_dir.current_id, orig_id.c_str());
+    snprintf(buffer, sizeof(buffer), "id:%06lu,src:%s", target_dir.current_id, orig_id.c_str());
     std::string new_name(buffer);
 
     fs::path target = target_dir.path / new_name;

@@ -61,13 +61,13 @@ uint64_t inputOffset = 0;
 /// Tell the solver to try an alternative value than the given one.
 template <typename V, typename F>
 void tryAlternative(V value, SymExpr valueExpr, F caller) {
-//  uintptr_t funcAddr = reinterpret_cast<uintptr_t>(caller);
-//  if (valueExpr) {
-//    _sym_push_path_constraint(
-//        _sym_build_equal(valueExpr,
-//                         _sym_build_integer(value, sizeof(value) * 8)),
-//        true, funcAddr, funcAddr, funcAddr);
-//  }
+  uintptr_t funcAddr = reinterpret_cast<uintptr_t>(caller);
+  if (valueExpr) {
+    _sym_push_path_constraint(
+        _sym_build_equal(valueExpr,
+                         _sym_build_integer(value, sizeof(value) * 8)),
+        true, funcAddr, -1, -1);
+  }
 }
 
 // A partial specialization for pointer types for convenience.
@@ -522,7 +522,7 @@ const char *SYM(strchr)(const char *s, int c) {
         _sym_build_not_equal(
             (*shadowIt != nullptr) ? *shadowIt : _sym_build_integer(s[i], 8),
             cExpr),
-        /*taken*/ 1, funAddr, funAddr, funAddr);
+        /*taken*/ 1, funAddr, -1, -1);
     ++shadowIt;
   }
 
@@ -552,7 +552,7 @@ int SYM(memcmp)(const void *a, const void *b, size_t n) {
 
   uintptr_t funcAddr = reinterpret_cast<uintptr_t>(SYM(memcmp));
   _sym_push_path_constraint(allEqual, result == 0,
-                            funcAddr, funcAddr, funcAddr);
+                            funcAddr, -1, -1);
   return result;
 }
 
@@ -590,7 +590,7 @@ int SYM(bcmp)(const void *a, const void *b, size_t n) {
 
   uintptr_t funcAddr = reinterpret_cast<uintptr_t>(SYM(bcmp));
   _sym_push_path_constraint(allEqual, result == 0,
-                            funcAddr, funcAddr, funcAddr);
+                            funcAddr, -1, -1);
   return result;
 }
 
@@ -661,7 +661,7 @@ int SYM(strcmp)(const char *a, const char *b) {
 
   uintptr_t funcAddr = reinterpret_cast<uintptr_t>(SYM(strcmp));
   _sym_push_path_constraint(allEqual, result == 0,
-                            funcAddr, funcAddr, funcAddr);
+                            funcAddr, -1, -1);
   return result;
 
   return result;
