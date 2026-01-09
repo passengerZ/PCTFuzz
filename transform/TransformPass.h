@@ -35,30 +35,23 @@ private:
   // Helpers for inserting SSA variables and types
   bool isBVType(ExprRef e) const {
     qsym::Kind k = e->kind();
-    bool res = (qsym::Kind::Constant <= k && k <= qsym::Kind::AShr) ||
-               (qsym::Kind::FPToBV <= k && k <= qsym::Kind::FPToUI) ;
+    bool res = (qsym::Kind::Constant <= k && k <= qsym::Kind::AShr);
     return res;
   }
   bool isBoolType(ExprRef e) const {
     qsym::Kind k = e->kind();
     bool res = (qsym::Kind::Bool == k) ||
-               (qsym::Kind::Equal <= k && k <= qsym::Kind::LNot) ||
-               (qsym::Kind::FOgt <= k && k <= qsym::Kind::FUne);
+               (qsym::Kind::Equal <= k && k <= qsym::Kind::LNot);
     return res;
   }
-  bool isFPType(ExprRef e) const {
-    qsym::Kind k = e->kind();
-    bool res = (qsym::Kind::Float <= k && k <= qsym::Kind::FAbs) ||
-               (qsym::Kind::BVToFP <= k && k <= qsym::Kind::UIToFP);
-    return res;
-  }
+
   bool isSigned(ExprRef e) const {
     qsym::Kind k = e->kind();
     bool res = false;
     switch (k) {
       case qsym::Kind::SExt: case qsym::Kind::SDiv: case qsym::Kind::SRem:
       case qsym::Kind::AShr: case qsym::Kind::Slt: case qsym::Kind::Sle:
-      case qsym::Kind::Sgt:  case qsym::Kind::Sge: case qsym::Kind::FPToSI:
+      case qsym::Kind::Sgt:  case qsym::Kind::Sge:
         res = true;
       default: break;
     }
@@ -142,26 +135,26 @@ private:
   void visitBvAShr(ExprRef e) override;
 
   // Floating point
-  void visitFloatIEEEEquals(ExprRef e)         override;
-  void visitFloatLessThan(ExprRef e)           override;
-  void visitFloatLessThanOrEqual(ExprRef e)    override;
-  void visitFloatGreaterThan(ExprRef e)        override;
-  void visitFloatGreaterThanOrEqual(ExprRef e) override;
-
-  void visitFloatAdd(ExprRef e) override;
-  void visitFloatSub(ExprRef e) override;
-  void visitFloatMul(ExprRef e) override;
-  void visitFloatDiv(ExprRef e) override;
-  void visitFloatRem(ExprRef e) override;
-  void visitFloatAbs(ExprRef e) override;
-
-  void visitConvertToFloatFromFloat(ExprRef e) override;
-  void visitConvertToIEEEBitVectorFromFloat(ExprRef e) override;
-  void visitConvertToFloatFromIEEEBitVector(ExprRef e) override;
-  void visitConvertToFloatFromUnsignedBitVector(ExprRef e) override;
-  void visitConvertToFloatFromSignedBitVector(ExprRef e) override;
-  void visitConvertToUnsignedBitVectorFromFloat(ExprRef e) override;
-  void visitConvertToSignedBitVectorFromFloat(ExprRef e) override;
+//  void visitFloatIEEEEquals(ExprRef e)         override;
+//  void visitFloatLessThan(ExprRef e)           override;
+//  void visitFloatLessThanOrEqual(ExprRef e)    override;
+//  void visitFloatGreaterThan(ExprRef e)        override;
+//  void visitFloatGreaterThanOrEqual(ExprRef e) override;
+//
+//  void visitFloatAdd(ExprRef e) override;
+//  void visitFloatSub(ExprRef e) override;
+//  void visitFloatMul(ExprRef e) override;
+//  void visitFloatDiv(ExprRef e) override;
+//  void visitFloatRem(ExprRef e) override;
+//  void visitFloatAbs(ExprRef e) override;
+//
+//  void visitConvertToFloatFromFloat(ExprRef e) override;
+//  void visitConvertToIEEEBitVectorFromFloat(ExprRef e) override;
+//  void visitConvertToFloatFromIEEEBitVector(ExprRef e) override;
+//  void visitConvertToFloatFromUnsignedBitVector(ExprRef e) override;
+//  void visitConvertToFloatFromSignedBitVector(ExprRef e) override;
+//  void visitConvertToUnsignedBitVectorFromFloat(ExprRef e) override;
+//  void visitConvertToSignedBitVectorFromFloat(ExprRef e) override;
 
   /*void visitFloatNeg(ExprRef e) override;
   void visitFloatMin(ExprRef e) override;

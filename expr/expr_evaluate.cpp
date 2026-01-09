@@ -38,10 +38,6 @@ namespace qsym {
     return std::make_shared<ConstantExpr>(this->value(), this->bits());
   }
 
-  ExprRef ConstantFloatExpr::evaluateImpl() {
-    return std::make_shared<ConstantFloatExpr>(this->value(), this->bits());
-  }
-
   ExprRef BoolExpr::evaluateImpl() {
     return std::make_shared<BoolExpr>(this->value());
   }

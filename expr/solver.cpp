@@ -88,7 +88,7 @@ Solver::Solver(
   , inputs_()
   , out_dir_(out_dir)
   , context_(*g_z3_context)
-  , solver_(z3::solver(context_, "QF_BVFP"))
+  , solver_(z3::solver(context_, "QF_BV"))
   , num_generated_(0)
   , trace_(bitmap)
   , last_interested_(false)
@@ -113,7 +113,6 @@ void Solver::push() {
 
 void Solver::reset() {
   solver_.reset();
-  inputs_.clear();
 }
 
 void Solver::pop() {
@@ -121,9 +120,8 @@ void Solver::pop() {
 }
 
 void Solver::add(z3::expr expr) {
-  if (!expr.is_const()){
+  if (!expr.is_const())
     solver_.add(expr.simplify());
-  }
 }
 
 z3::check_result Solver::check() {
@@ -136,7 +134,7 @@ z3::check_result Solver::check() {
   try {
     res = solver_.check();
   }
-  catch(const z3::exception& e) {
+  catch(z3::exception& e) {
     // https://github.com/Z3Prover/z3/issues/419
     // timeout can cause exception
     res = z3::unknown;
@@ -144,9 +142,39 @@ z3::check_result Solver::check() {
   uint64_t cur = getTimeStamp();
   uint64_t elapsed = cur - before;
   solving_time_ += elapsed;
-//  LOG_STAT("SMT: { \"curr solving_time\": " + decstr(elapsed) + " }\n");
+//  LOG_STAT("SMT: { \"solving_time\": " + decstr(solving_time_) + " }\n");
   return res;
 }
+
+void Solver::setInputFile(const std::string &input_file) {
+  input_file_ = input_file;
+  readInput();
+}
+
+  std::string Solver::fetchTestcase() {
+    std::string fname;
+    if (check() != z3::sat) {
+      LOG_DEBUG("unsat\n");
+      return fname;
+    }
+
+    std::vector<UINT8> values = getConcreteValues();
+
+    fname = out_dir_+ "/pct_" + toString6digit(num_generated_);
+    ofstream of(fname, std::ofstream::out | std::ofstream::binary);
+    if (of.fail())
+      LOG_FATAL("Unable to open a file to write results\n");
+
+    // highperformace write
+    if (!values.empty()) {
+      of.write(reinterpret_cast<const char*>(values.data()),
+               static_cast<std::streamsize>(values.size()));
+    }
+
+    of.close();
+    num_generated_++;
+    return fname;
+  }
 
 bool Solver::checkAndSave(const std::string& postfix) {
   if (check() == z3::sat) {
@@ -286,19 +314,13 @@ void Solver::checkOutDir() {
 void Solver::readInput() {
   std::ifstream ifs (input_file_, std::ifstream::in | std::ifstream::binary);
   if (ifs.fail()) {
-    LOG_FATAL("Cannot open an input file : " + input_file_ + "\n");
+    LOG_FATAL("Cannot open an input file\n");
     exit(-1);
   }
 
   char ch;
-  while (ifs.get(ch)){
+  while (ifs.get(ch))
     inputs_.push_back((UINT8)ch);
-  }
-}
-
-void Solver::setInputFile(const std::string &input_file) {
-  input_file_ = input_file;
-  readInput();
 }
 
 std::vector<UINT8> Solver::getConcreteValues() {
@@ -308,21 +330,6 @@ std::vector<UINT8> Solver::getConcreteValues() {
   std::vector<UINT8> values = inputs_;
   for (unsigned i = 0; i < num_constants; i++) {
     z3::func_decl decl = m.get_const_decl(i);
-
-    /// FIXME: Ugly code, a general method is needed.
-    if (decl.decl_kind() == Z3_OP_FPA_RM_NEAREST_TIES_TO_EVEN ||
-        decl.decl_kind() == Z3_OP_FPA_RM_NEAREST_TIES_TO_AWAY ||
-        decl.decl_kind() == Z3_OP_FPA_RM_TOWARD_POSITIVE ||
-        decl.decl_kind() == Z3_OP_FPA_RM_TOWARD_NEGATIVE ||
-        decl.decl_kind() == Z3_OP_FPA_RM_TOWARD_ZERO ||
-        decl.decl_kind() == Z3_OP_FPA_NUM ||
-        decl.decl_kind() == Z3_OP_FPA_PLUS_INF ||
-        decl.decl_kind() == Z3_OP_FPA_MINUS_INF ||
-        decl.decl_kind() == Z3_OP_FPA_NAN ||
-        decl.decl_kind() == Z3_OP_FPA_PLUS_ZERO ||
-        decl.decl_kind() == Z3_OP_FPA_MINUS_ZERO)
-      continue;
-
     z3::expr e = m.get_const_interp(decl);
     z3::symbol name = decl.name();
 
@@ -352,45 +359,14 @@ void Solver::saveValues(const std::string& postfix) {
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");
 
-  // highperformace write
-  if (!values.empty()) {
-    of.write(reinterpret_cast<const char*>(values.data()),
-             static_cast<std::streamsize>(values.size()));
-  }
+      // TODO: batch write
+      for (unsigned i = 0; i < values.size(); i++) {
+        char val = values[i];
+        of.write(&val, sizeof(val));
+      }
 
   of.close();
   num_generated_++;
-}
-
-std::string Solver::fetchTestcase() {
-  std::string fname;
-  if (check() != z3::sat) {
-    LOG_DEBUG("unsat\n");
-    return fname;
-  }
-
-  std::vector<UINT8> values = getConcreteValues();
-
-  fname = out_dir_+ "/pct_" + toString6digit(num_generated_);
-  ofstream of(fname, std::ofstream::out | std::ofstream::binary);
-  if (of.fail())
-    LOG_FATAL("Unable to open a file to write results\n");
-
-  // highperformace write
-  if (!values.empty()) {
-    of.write(reinterpret_cast<const char*>(values.data()),
-             static_cast<std::streamsize>(values.size()));
-  }
-
-//  std::cerr << "[zgf dbg] write_file: " << fname << ": ";
-//  for (auto v : values){
-//    std::cerr << " " << (int)v;
-//  }
-//  std::cerr << " xxxxx\n";
-
-  of.close();
-  num_generated_++;
-  return fname;
 }
 
 void Solver::printValues(const std::vector<UINT8>& values) {

@@ -21,8 +21,8 @@ class SearchStrategy {
 public:
 
   SearchStrategy() {
-    loadJSON();
-    computeReachable();
+//    loadJSON();
+//    computeReachable();
   }
 
   std::map<std::string, FunctionCFG> allCFGs;
@@ -35,7 +35,7 @@ public:
 
   void loadJSON(){
     const char *CFGFile = getenv("PCT_CFG_PATH");
-    llvm::errs() << "[PCT] fetch CFG in PCT_CFG_PATH : " << CFGFile << "\n";
+    //llvm::errs() << "[PCT] fetch CFG in PCT_CFG_PATH : " << CFGFile << "\n";
     const std::string cfgFile(CFGFile);
 
     std::ifstream file(cfgFile);

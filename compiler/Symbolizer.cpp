@@ -41,8 +41,7 @@ void Symbolizer::symbolizeFunctionArguments(Function &F) {
 
 void Symbolizer::insertBasicBlockNotification(llvm::BasicBlock &B) {
   IRBuilder<> IRB(&*B.getFirstInsertionPt());
-  uint64_t ADDR = reinterpret_cast<uint64_t>(&B);
-  IRB.CreateCall(runtime.notifyBasicBlock, {getBBID(ADDR)});
+  IRB.CreateCall(runtime.notifyBasicBlock, getTargetPreferredInt(&B));
 }
 
 void Symbolizer::finalizePHINodes() {
@@ -442,13 +441,10 @@ void Symbolizer::visitSelectInst(SelectInst &I) {
   // expression over from the chosen argument.
 
   IRBuilder<> IRB(&I);
-  auto BBID =  getBBID(reinterpret_cast<uint64_t>(I.getParent()));
   auto runtimeCall = buildRuntimeCall(IRB, runtime.pushPathConstraint,
                                       {{I.getCondition(), true},
                                        {I.getCondition(), false},
-                                       {getTargetPreferredInt(&I), false},
-                                       {BBID, false},
-                                       {BBID, false}});
+                                       {getTargetPreferredInt(&I), false}});
   registerSymbolicComputation(runtimeCall);
   if (getSymbolicExpression(I.getTrueValue()) ||
       getSymbolicExpression(I.getFalseValue())) {
@@ -502,14 +498,10 @@ void Symbolizer::visitBranchInst(BranchInst &I) {
     return;
 
   IRBuilder<> IRB(&I);
-  auto runtimeCall = buildRuntimeCall(
-      IRB, runtime.pushPathConstraint,
-      {{I.getCondition(), true},
-       {I.getCondition(), false},
-       {getTargetPreferredInt(&I), false},
-       {getBBID(reinterpret_cast<uint64_t>(I.getSuccessor(0))), false},
-       {getBBID(reinterpret_cast<uint64_t>(I.getSuccessor(1))), false}
-      });
+  auto runtimeCall = buildRuntimeCall(IRB, runtime.pushPathConstraint,
+                                      {{I.getCondition(), true},
+                                       {I.getCondition(), false},
+                                       {getTargetPreferredInt(&I), false}});
   registerSymbolicComputation(runtimeCall);
 }
 
@@ -934,9 +926,6 @@ void Symbolizer::visitSwitchInst(SwitchInst &I) {
   auto *constraintBlock = SplitBlockAndInsertIfThen(haveSymbolicCondition, &I,
                                                     /* unreachable */ false);
 
-  unsigned caseCount = 0;
-  unsigned caseNum   = I.getNumCases();
-
   // In the constraint block, we push one path constraint per case.
   IRB.SetInsertPoint(constraintBlock);
   for (auto &caseHandle : I.cases()) {
@@ -944,18 +933,8 @@ void Symbolizer::visitSwitchInst(SwitchInst &I) {
     auto *caseConstraint = IRB.CreateCall(
         runtime.comparisonHandlers[CmpInst::ICMP_EQ],
         {conditionExpr, createValueExpression(caseHandle.getCaseValue(), IRB)});
-
-    caseCount ++;
-    BasicBlock *falseBranch =  I.getDefaultDest();
-    if(caseCount < caseNum)
-      falseBranch = I.getSuccessor(caseCount + 1);
-
-    IRB.CreateCall(
-        runtime.pushPathConstraint,
-        {caseConstraint, caseTaken, getTargetPreferredInt(&I),
-         getBBID(reinterpret_cast<uint64_t>(caseHandle.getCaseSuccessor())),
-         getBBID(reinterpret_cast<uint64_t>(falseBranch))
-        });
+    IRB.CreateCall(runtime.pushPathConstraint,
+                   {caseConstraint, caseTaken, getTargetPreferredInt(&I)});
   }
 }
 
@@ -1125,10 +1104,9 @@ void Symbolizer::tryAlternative(IRBuilder<> &IRB, Value *V) {
     auto *destAssertion =
         IRB.CreateCall(runtime.comparisonHandlers[CmpInst::ICMP_EQ],
                        {destExpr, concreteDestExpr});
-    auto BBID = llvm::ConstantInt::get(intPtrType, -1);
     auto *pushAssertion = IRB.CreateCall(
         runtime.pushPathConstraint,
-        {destAssertion, IRB.getInt1(true), getTargetPreferredInt(V), BBID, BBID});
+        {destAssertion, IRB.getInt1(true), getTargetPreferredInt(V)});
     registerSymbolicComputation(SymbolicComputation(
         concreteDestExpr, pushAssertion, {Input(V, 0, destAssertion)}));
   }

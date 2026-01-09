@@ -5,16 +5,13 @@
 #include <cassert>
 #include <iostream>
 #include <set>
-#include <iomanip>
-#include "pin.H"
-#include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APSInt.h>
+#include "pin.H"
 
 namespace qsym {
 
 std::string LLVMIntToString(const llvm::APInt &i, unsigned radix);
 std::string LLVMIntToString(const llvm::APSInt &i, unsigned radix);
-std::string LLVMFloatToString(const llvm::APFloat &i, unsigned radix);
 
 class BitVectorFactory {
 public:

@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <string>
 #include "pin.H"
+#include "compiler.h"
 
 namespace qsym {
 

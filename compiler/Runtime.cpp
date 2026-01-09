@@ -72,8 +72,8 @@ Runtime::Runtime(Module &M) {
   buildConcat =
       import(M, "_sym_concat_helper", ptrT, ptrT,
              ptrT); // doesn't follow naming convention for historic reasons
-  pushPathConstraint = import(M, "_sym_push_path_constraint",
-             voidT, ptrT, int1T, intPtrType, intPtrType, intPtrType);
+  pushPathConstraint =
+      import(M, "_sym_push_path_constraint", voidT, ptrT, int1T, intPtrType);
 
   // Overflow arithmetic
   buildAddOverflow =
@@ -198,8 +198,7 @@ bool isInterceptedFunction(const Function &f) {
       "fseeko", "rewind",  "fseeko64", "getc",    "ungetc",  "memcpy",
       "memset", "strncpy", "strchr",   "memcmp",  "memmove", "ntohl",
       "fgets",  "fgetc",   "getchar",  "bcopy",   "bcmp",    "bzero",
-      "exit",
-      "strcmp"};
+      "exit",   "strcmp"};
 
   return (kInterceptedFunctions.count(f.getName()) > 0);
 }

@@ -18,7 +18,7 @@
 #include <vector>
 
 #include <Runtime.h>
-#include "Shadow.h"
+#include <Shadow.h>
 
 /// A list of memory regions that are known to contain symbolic expressions.
 std::vector<ExpressionRegion> expressionRegions;

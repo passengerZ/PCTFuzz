@@ -149,7 +149,7 @@ SymExpr _sym_read_memory(uint8_t *addr, size_t length, bool little_endian) {
     return nullptr;
 
   ReadOnlyShadow shadow(addr, length);
-  SymExpr mem = std::accumulate(shadow.begin_non_null(), shadow.end_non_null(),
+  return std::accumulate(shadow.begin_non_null(), shadow.end_non_null(),
                          static_cast<SymExpr>(nullptr),
                          [&](SymExpr result, SymExpr byteExpr) {
                            if (result == nullptr)
@@ -159,7 +159,6 @@ SymExpr _sym_read_memory(uint8_t *addr, size_t length, bool little_endian) {
                                       ? _sym_concat_helper(byteExpr, result)
                                       : _sym_concat_helper(result, byteExpr);
                          });
-  return mem;
 }
 
 void _sym_write_memory(uint8_t *addr, size_t length, SymExpr expr,

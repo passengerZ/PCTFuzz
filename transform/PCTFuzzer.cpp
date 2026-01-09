@@ -112,7 +112,7 @@ void deserializeToQsymExpr(
     break;
   }
   case ExprKind::Neg: case ExprKind::Not:
-  case ExprKind::LNot: case ExprKind::FAbs: {
+  case ExprKind::LNot: {
     deserializeToQsymExpr(protoExpr.children(0), child0);
     qsymExpr = g_expr_builder->createUnaryExpr(
         static_cast<qsym::Kind>(to_underlying(exprKind)), child0);
@@ -130,16 +130,7 @@ void deserializeToQsymExpr(
   case ExprKind::URem: case ExprKind::SRem:
   case ExprKind::And: case ExprKind::Or: case ExprKind::Xor:
   case ExprKind::Shl: case ExprKind::LShr: case ExprKind::AShr:
-    // Binary floating-point arithmetic operators
-  case ExprKind::FAdd: case ExprKind::FSub: case ExprKind::FMul:
-  case ExprKind::FDiv: case ExprKind::FRem:
-  case ExprKind::FOgt: case ExprKind::FOge:
-  case ExprKind::FOlt: case ExprKind::FOle:
-  case ExprKind::FOne: case ExprKind::FOeq:
-  case ExprKind::FOrd: case ExprKind::FUno:
-  case ExprKind::FUlt: case ExprKind::FUle:
-  case ExprKind::FUgt: case ExprKind::FUge:
-  case ExprKind::FUeq: case ExprKind::FUne:
+
     // Binary relational operators
   case ExprKind::Equal: case ExprKind::Distinct:
   case ExprKind::Ult: case ExprKind::Ule:
@@ -162,49 +153,7 @@ void deserializeToQsymExpr(
   }
 
     // Floating-point arithmetic operators
-  case ExprKind::FPToBV: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->floatToBits(child0);
-    break;
-  }
-  case ExprKind::BVToFP: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->bitsToFloat(child0, protoExpr.bits() == 64);
-    break;
-  }
-  case ExprKind::FPToFP: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->floatToFloat(child0, protoExpr.bits() == 64);
-    break;
-  }
-  case ExprKind::FPToSI: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->floatToSignInt(child0, protoExpr.bits());
-    break;
-  }
-  case ExprKind::FPToUI: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->floatToUnsignInt(child0, protoExpr.bits());
-    break;
-  }
-  case ExprKind::SIToFP: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->intToFloat(
-        child0, protoExpr.bits() == 64, true);
-    break;
-  }
-  case ExprKind::UIToFP: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    qsymExpr = g_expr_builder->intToFloat(
-        child0, protoExpr.bits() == 64, false);
-    break;
-  }
-  case ExprKind::Float: {
-    llvm::APInt iValue = llvm::APInt(64, protoExpr.value());
-    qsymExpr = g_expr_builder->createConstantFloat(
-        llvm::APFloat(iValue.bitsToDouble()), protoExpr.bits());
-    break;
-  }
+
     // Unknown operators
   case ExprKind::Rol:
   case ExprKind::Ror:
@@ -218,32 +167,16 @@ void deserializeToQsymExpr(
   cached.insert(make_pair(hashValue, qsymExpr));
 }
 
-unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
+void updatePCTree(const fs::path &constraint_file, const fs::path &input) {
   ifstream inputf(constraint_file, std::ofstream::in | std::ofstream::binary);
   if (inputf.fail()){
     std::cerr << "Unable to open a file ["
               << constraint_file <<"] to update Path Constaint Tree\n";
-    return false;
+    return;
   }
 
   ConstraintSequence cs;
   cs.ParseFromIstream(&inputf);
-
-  // covnew ----> interst = 1;
-  unsigned isInterest = 0;
-  //std::cerr << "[PCT] visTrace : ";
-  for (int i = 0; i < cs.bbid_size(); i+=2) {
-    // note : Odd position as srcBB, even position as dstBB
-    const uint32_t srcBB = cs.bbid(i);
-    const uint32_t dstBB = cs.bbid(i+1);
-
-    trace covTrace = std::make_pair(srcBB,dstBB);
-    bool isCovNew = executionTree->updateCovTrace(covTrace);
-    // insert success, means new trace have been visited
-    if (isCovNew){
-      isInterest = 1;
-    }
-  }
 
   ExprRef pathCons;
   TreeNode *currNode = executionTree->getRoot();
@@ -256,81 +189,57 @@ unsigned updatePCTree(const fs::path &constraint_file, const fs::path &input) {
 
     deserializeToQsymExpr(pnode.constraint(), pathCons);
 //    std::cerr << "[zgf dbg] idx : " << i << " " << pathCons->toString() << "\n";
-    PCTNode pctNode(pathCons, input, branchTaken, 0,
-                    pnode.b_id(), pnode.b_left(), pnode.b_right());
+    PCTNode pctNode(pathCons, input, branchTaken, 0, pnode.b_id());
 
     currNode = executionTree->updateTree(currNode, pctNode);
     if (currNode == executionTree->getRoot())
       break;
   }
 
-  return isInterest;
+  return;
 }
 
-unsigned execute_fuzzer(
+void execute_fuzzer(
     std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
 
   // avoid symcc to failed open afl-busy seed
   fs::path currInput = state->copy_testcase_to_dir(input, state->seen, false);
   input = currInput.string();
   if (input.empty())
-    return 0;
+    return;
 
-  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config);
+  // merge AFL new input into current Bitmap
+  state->evaluate_new_testcase(
+      input, symcc->work_dir, *afl_config, true);
+  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config, true);
   qsym::updatePCTree(symccRes.constraint_file, input);
 
-  for (const auto& new_test : symccRes.test_cases)
+  for (const auto& new_test : symccRes.test_cases){
     state->evaluate_new_testcase(
         new_test, symcc->work_dir, *afl_config, false);
-
-  // save covnew input
-  TestcaseResult res = state->evaluate_new_testcase(
-      input, symcc->work_dir, *afl_config, true);
-  return res == TestcaseResult::New;
+  }
 }
 
-unsigned execute_dse(
-    std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
-
-  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config);
+void execute_dse(std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
+  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config, false);
   qsym::updatePCTree(symccRes.constraint_file, input);
-
-  // save covnew input
-  TestcaseResult res = state->evaluate_new_testcase(
+  state->evaluate_new_testcase(
         input, symcc->work_dir, *afl_config, false);
-  return res == TestcaseResult::New;
 }
 
-bool solved_pct(std::vector<TreeNode *> *tobeExplores,
+void solved_pct(std::vector<TreeNode *> *tobeExplores,
                  State *state, SymCC *symcc, AflConfig* afl_config){
   if (tobeExplores->empty())
-    return false;
+    return ;
 
-  bool hasCovNew = false;
-
-  uint32_t deepest = 0;
-  std::string heurisCase;
   for (auto node : *tobeExplores){
     std::string testcase = executionTree->generateTestCase(node);
     if (testcase.empty())
       continue;
 
-    if (node->depth > deepest){
-      deepest = node->depth;
-      heurisCase = testcase;
-    }
-
-    bool currCovNew = execute_dse(testcase, state, symcc, afl_config);
-    hasCovNew |= currCovNew;
-
+    execute_dse(testcase, state, symcc, afl_config);
     state->solved.current_id++;
   }
-
-  if (!hasCovNew){
-    fs::path newCase = state->copy_testcase_to_dir(heurisCase, state->queue, false);
-    //std::cerr << "[PCT] Heuristic Testcase : " << newCase.string() << "\n";
-  }
-  return hasCovNew;
 }
 
 bool build_pct_evaluator(State *state){
@@ -418,7 +327,6 @@ int main (int argc, char* argv[]){
   uint32_t NoNewTimeoutSec = 20;
   uint32_t EvaluatorTimeLimitSec = 30;
 
-  bool hasCovNew = false;
   while (true) {
     std::this_thread::sleep_for(std::chrono::seconds(PollInterval));
 
@@ -437,7 +345,7 @@ int main (int argc, char* argv[]){
         std::vector<TreeNode*> tobeExplore =
             executionTree->selectWillBeVisitedNodes(BatchSeedSize);
 
-        hasCovNew |= solved_pct(&tobeExplore, &state, &symcc, &afl_config);
+        solved_pct(&tobeExplore, &state, &symcc, &afl_config);
         std::cerr << "[PCT] SMT Selected " << tobeExplore.size() << " nodes, Now testcases is "
                   << state.solved.current_id <<".\n";
 
@@ -463,7 +371,6 @@ int main (int argc, char* argv[]){
             std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
           }
         }
-
       }
 
       continue;

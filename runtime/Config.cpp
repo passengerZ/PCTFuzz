@@ -72,6 +72,10 @@ void loadConfig() {
   if (pruning != nullptr)
     g_config.pruning = checkFlagString(pruning);
 
+  auto *useSolver = getenv("SYMCC_ENABLE_SOLVER");
+  if (useSolver != nullptr)
+    g_config.useSolver = checkFlagString(useSolver);
+
   auto *aflCoverageMap = getenv("SYMCC_AFL_COVERAGE_MAP");
   if (aflCoverageMap != nullptr)
     g_config.aflCoverageMap = aflCoverageMap;

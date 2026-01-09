@@ -43,11 +43,6 @@ CXXTypeRef TransformPass::getOrInsertTy(ExprRef e) {
         program.get(), "bool", /*isConst=*/true);
   }else if (isBVType(e)){
     return getBVTy(e->bits(), isSigned(e));
-  }else if (isFPType(e)){
-    std::string underlyingString = e->bits() == 64 ? "double" : "float";
-    auto ty = std::make_shared<CXXType>(
-        program.get(), underlyingString, /*isConst=*/false);
-    return ty;
   }else{
     llvm::errs() << "[PCT] Unhandle Expr : " << e->toString() << "\n";
     llvm_unreachable("Unhandled sort");
@@ -406,22 +401,6 @@ std::string TransformPass::getBVConstantStr(ExprRef e) const {
   return underlyingString;
 }
 
-std::string TransformPass::getFPConstantStr(ExprRef e) const {
-  ConstantFloatExprRef fpConstExpr = castAs<ConstantFloatExpr>(e);
-  assert(fpConstExpr->bits() == 32 || fpConstExpr->bits() == 64);
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  llvm::APFloat apf = fpConstExpr->value();
-
-  if (fpConstExpr->bits() == 64){
-    ss << "(" << apf.convertToDouble() << ")";
-  }else{
-    ss << "(" << apf.convertToFloat() << ")";
-  }
-  ss.flush();
-  return underlyingString;
-}
-
 std::string TransformPass::getFreshSymbol() {
   // TODO: Do something more sophisticatd
   std::string underlyingString;
@@ -547,9 +526,6 @@ void TransformPass::visitConstant(ExprRef e) {
   }
   else if (e->kind() == qsym::Constant){
     exprToSymbolName.insert(std::make_pair(e, getBVConstantStr(e)));
-  }
-  else if (e->kind() == qsym::Float){
-    exprToSymbolName.insert(std::make_pair(e, getFPConstantStr(e)));
   }
   else{
     llvm::errs()
@@ -779,138 +755,4 @@ void TransformPass::visitBvExtract(ExprRef e) {
   insertSSAStmt(e, ss.str());
 }
 
-// Floating point
-#define FP_UNARY_OP(NAME, CALL_NAME)                                            \
-  void TransformPass::NAME(ExprRef e) {                                         \
-    auto arg = e->getChild(0);                                                  \
-    std::string underlyingString;                                               \
-    llvm::raw_string_ostream ss(underlyingString);                              \
-    ss << #CALL_NAME "(" << getSymbolFor(arg) << ")";                           \
-    insertSSAStmt(e, ss.str());                                                 \
-  }
-//FP_UNARY_OP(visitFloatIsNaN, isNaN)
-//FP_UNARY_OP(visitFloatIsNormal, isNormal)
-//FP_UNARY_OP(visitFloatIsSubnormal, isSubnormal)
-//FP_UNARY_OP(visitFloatIsZero, isZero)
-//FP_UNARY_OP(visitFloatIsPositive, isPositive)
-//FP_UNARY_OP(visitFloatIsNegative, isNegative)
-//FP_UNARY_OP(visitFloatIsInfinite, isInfinite)
-//FP_UNARY_OP(visitFloatNeg, neg)
-FP_UNARY_OP(visitFloatAbs, abs)
-#undef FP_UNARY_OP
-
-#define FP_BIN_OP(NAME, CALL_NAME)                                              \
-  void TransformPass::NAME(ExprRef e) {                                         \
-    auto lhs = e->getChild(0);                                                  \
-    auto rhs = e->getChild(1);                                                  \
-    std::string underlyingString;                                               \
-    llvm::raw_string_ostream ss(underlyingString);                              \
-    ss << getSymbolFor(lhs) << " " #CALL_NAME " "                               \
-       << getSymbolFor(rhs);                                                    \
-    insertSSAStmt(e, ss.str());                                                 \
-  }
-
-FP_BIN_OP(visitFloatIEEEEquals, ==)
-FP_BIN_OP(visitFloatLessThan, <)
-FP_BIN_OP(visitFloatLessThanOrEqual, <=)
-FP_BIN_OP(visitFloatGreaterThan, >)
-FP_BIN_OP(visitFloatGreaterThanOrEqual, >=)
-
-void TransformPass::visitFloatRem(ExprRef e) {
-  auto lhs = e->getChild(0);
-  auto rhs = e->getChild(1);
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  ss << "fmod(" << getSymbolFor(lhs) << ", " << getSymbolFor(rhs) << ")";
-  insertSSAStmt(e, ss.str());
-}
-#undef FP_BIN_OP
-
-#define FP_BIN_WITH_RM_OP(NAME, CALL_NAME)                                     \
-  void TransformPass::NAME(ExprRef e) {                                        \
-    auto lhs = e->getChild(0);                                                 \
-    auto rhs = e->getChild(1);                                                 \
-    std::string underlyingString;                                              \
-    llvm::raw_string_ostream ss(underlyingString);                             \
-    ss << getSymbolFor(lhs) << " " #CALL_NAME " "                              \
-       << getSymbolFor(rhs);                                                   \
-    insertSSAStmt(e, ss.str());                                                \
-  }
-FP_BIN_WITH_RM_OP(visitFloatAdd, +)
-FP_BIN_WITH_RM_OP(visitFloatSub, -)
-FP_BIN_WITH_RM_OP(visitFloatMul, *)
-FP_BIN_WITH_RM_OP(visitFloatDiv, /)
-#undef FP_BIN_WITH_RM_OP
-
-
-void TransformPass::visitConvertToFloatFromFloat(ExprRef e) {
-  auto arg = e->getChild(0);
-
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  if (e->bits() == 64)
-    ss << "(double)" << getSymbolFor(arg);
-  else
-    ss << "(float)" << getSymbolFor(arg);
-  insertSSAStmt(e, ss.str());
-}
-
-void TransformPass::visitConvertToFloatFromUnsignedBitVector(ExprRef e) {
-  auto arg = e->getChild(0);
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  std::string eType = "double";
-  if (e->bits() == 32)
-    eType = "float";
-  ss << "(" << eType << ") " << getSymbolFor(arg);
-  insertSSAStmt(e, ss.str());
-}
-
-void TransformPass::visitConvertToFloatFromSignedBitVector(ExprRef e) {
-  // the same as visitConvertToFloatFromUnsignedBitVector
-  visitConvertToFloatFromUnsignedBitVector(e);
-}
-
-void TransformPass::visitConvertToIEEEBitVectorFromFloat(ExprRef e) {
-  // the same as visitConvertToFloatFromIEEEBitVector
-  visitConvertToFloatFromIEEEBitVector(e);
-}
-
-void TransformPass::visitConvertToFloatFromIEEEBitVector(ExprRef e) {
-  auto arg = e->getChild(0);
-
-  auto assignmentTy = getOrInsertTy(e);
-  std::string varName = getFreshSymbol();
-  exprToSymbolName.insert(std::make_pair(e, varName));
-
-  auto varDefineStmt = std::make_shared<CXXDeclAndDefnVarStatement>(
-      getCurrentBlock().get(), assignmentTy, varName, "0");
-  getCurrentBlock().get()->statements.push_back(varDefineStmt);
-
-  // memcpy(&y, &x, sizeof(x));
-  std::string underlyingString;
-  llvm::raw_string_ostream ss(underlyingString);
-  ss << "memcpy(&" << varName << ", &" << getSymbolFor(arg)
-     << ", sizeof(" << getSymbolFor(arg) <<  "))";
-  ss.flush();
-  auto voidStmt = std::make_shared<CXXGenericStatement>(
-      getCurrentBlock().get(), underlyingString);
-  getCurrentBlock()->statements.push_back(voidStmt);
-}
-
-
-#define FP_CONVERT_TO_BV_OP(NAME, CALL_NAME)                                    \
-  void TransformPass::NAME(ExprRef e) {                                         \
-    if (exprToSymbolName.find(e) != exprToSymbolName.end())                     \
-        return;                                                                 \
-    auto arg = e->getChild(0);                                                  \
-    std::string underlyingString;                                               \
-    llvm::raw_string_ostream ss(underlyingString);                              \
-    std::string eType = getBVTypeStr(e->bits(), isSigned(e));                   \
-    ss << "(" << eType << ")" << getSymbolFor(arg);                             \
-    insertSSAStmt(e, ss.str());                                                 \
-  }
-FP_CONVERT_TO_BV_OP(visitConvertToUnsignedBitVectorFromFloat, convertToUnsignedBV)
-FP_CONVERT_TO_BV_OP(visitConvertToSignedBitVectorFromFloat, convertToSignedBV)
-#undef FP_CONVERT_TO_BV_OP
 }

@@ -62,9 +62,7 @@ void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
             << " " << status << " " << constraintStr;
 
   // 打印基本块信息
-  std::cerr << "  (BB:" << node->data.currBB
-            << " -> " << (node->data.taken ? node->data.leftBB : node->data.rightBB)
-            << ")";
+  std::cerr << "  (BB:" << node->data.currBB << ")";
   std::cerr << '\n';
 }
 

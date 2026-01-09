@@ -44,40 +44,11 @@ enum ExprKind {
   LNot = 34;
   // Special
   Ite = 35;
-  // Float expression
-  Float = 36;
-  FAdd = 37;
-  FSub = 38;
-  FMul = 39;
-  FDiv = 40;
-  FRem = 41;
-  FAbs = 42;
-  FOgt = 43;
-  FOge = 44;
-  FOlt = 45;
-  FOle = 46;
-  FOeq = 47;
-  FOne = 48;
-  FOrd = 49;
-  FUno = 50;
-  FUgt = 51;
-  FUge = 52;
-  FUlt = 53;
-  FUle = 54;
-  FUeq = 55;
-  FUne= 56;
-  FPToBV = 57;
-  FPToSI = 58;
-  FPToUI = 59;
-  BVToFP = 60;
-  FPToFP = 61;
-  SIToFP = 62;
-  UIToFP = 63;
 
   // Virtual operation
-  Rol = 64;
-  Ror = 65;
-  Invalid = 66;
+  Rol = 36;
+  Ror = 37;
+  Invalid = 38;
 }
 
 message SymbolicExpr {
@@ -95,13 +66,9 @@ message SequenceNode {
   SymbolicExpr constraint = 1;
   uint32 taken   = 2;
   uint32 b_id    = 3;
-  uint32 b_left  = 4;
-  uint32 b_right = 5;
 }
 
 message ConstraintSequence {
   repeated SequenceNode node = 1;
-  repeated uint32 BBID = 2;
-  uint32 varBytes  = 3;
-  uint32 runSignal = 4;
+  uint32 varBytes  = 2;
 }

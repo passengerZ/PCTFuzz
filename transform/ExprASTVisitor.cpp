@@ -20,7 +20,6 @@ void ExprASTVisitor::visit(ExprRef e) {
   switch (e->kind()) {
   case qsym::Kind::Bool:
   case qsym::Kind::Constant:
-  case qsym::Kind::Float:
     ACTION(visitConstant(e))
 
   case qsym::Kind::Read:
@@ -93,46 +92,6 @@ void ExprASTVisitor::visit(ExprRef e) {
   // Special
   case qsym::Kind::Ite:
     ACTION(visitIfThenElse(e))
-
-  // Floating point operations
-  case qsym::Kind::FAdd:
-    ACTION(visitFloatAdd(e))
-  case qsym::Kind::FSub:
-    ACTION(visitFloatSub(e))
-  case qsym::Kind::FMul:
-    ACTION(visitFloatMul(e))
-  case qsym::Kind::FDiv:
-    ACTION(visitFloatDiv(e))
-  case qsym::Kind::FRem:
-    ACTION(visitFloatRem(e))
-  case qsym::Kind::FAbs:
-    ACTION(visitFloatAbs(e))
-
-  case qsym::Kind::FOeq: case qsym::Kind::FUeq:
-    ACTION(visitFloatIEEEEquals(e))
-  case qsym::Kind::FOlt: case qsym::Kind::FUlt:
-    ACTION(visitFloatLessThan(e))
-  case qsym::Kind::FOle: case qsym::Kind::FUle:
-    ACTION(visitFloatLessThanOrEqual(e))
-  case qsym::Kind::FOgt: case qsym::Kind::FUgt:
-    ACTION(visitFloatGreaterThan(e))
-  case qsym::Kind::FOge: case qsym::Kind::FUge:
-    ACTION(visitFloatGreaterThanOrEqual(e))
-
-  case qsym::Kind::FPToFP:
-    ACTION(visitConvertToFloatFromFloat(e))
-  case qsym::Kind::FPToBV:
-    ACTION(visitConvertToIEEEBitVectorFromFloat(e))
-  case qsym::Kind::BVToFP:
-    ACTION(visitConvertToFloatFromIEEEBitVector(e))
-  case qsym::Kind::FPToUI:
-    ACTION(visitConvertToUnsignedBitVectorFromFloat(e))
-  case qsym::Kind::FPToSI:
-    ACTION(visitConvertToSignedBitVectorFromFloat(e))
-  case qsym::Kind::UIToFP:
-    ACTION(visitConvertToFloatFromUnsignedBitVector(e))
-  case qsym::Kind::SIToFP:
-    ACTION(visitConvertToFloatFromSignedBitVector(e))
 
   default:
     llvm_unreachable("unsupported kind");

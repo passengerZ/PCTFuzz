@@ -62,26 +62,26 @@ protected:
   virtual void visitIfThenElse(ExprRef e) = 0;
 
   // Floating point operations
-  virtual void visitFloatIEEEEquals(ExprRef e) = 0;
-  virtual void visitFloatLessThan(ExprRef e) = 0;
-  virtual void visitFloatLessThanOrEqual(ExprRef e) = 0;
-  virtual void visitFloatGreaterThan(ExprRef e) = 0;
-  virtual void visitFloatGreaterThanOrEqual(ExprRef e) = 0;
-
-  virtual void visitFloatAbs(ExprRef e) = 0;
-  virtual void visitFloatAdd(ExprRef e) = 0;
-  virtual void visitFloatSub(ExprRef e) = 0;
-  virtual void visitFloatMul(ExprRef e) = 0;
-  virtual void visitFloatDiv(ExprRef e) = 0;
-  virtual void visitFloatRem(ExprRef e) = 0;
-
-  virtual void visitConvertToFloatFromFloat(ExprRef e) = 0;
-  virtual void visitConvertToIEEEBitVectorFromFloat(ExprRef e) = 0;
-  virtual void visitConvertToFloatFromIEEEBitVector(ExprRef e) = 0;
-  virtual void visitConvertToFloatFromUnsignedBitVector(ExprRef e) = 0;
-  virtual void visitConvertToFloatFromSignedBitVector(ExprRef e) = 0;
-  virtual void visitConvertToUnsignedBitVectorFromFloat(ExprRef e) = 0;
-  virtual void visitConvertToSignedBitVectorFromFloat(ExprRef e) = 0;
+//  virtual void visitFloatIEEEEquals(ExprRef e) = 0;
+//  virtual void visitFloatLessThan(ExprRef e) = 0;
+//  virtual void visitFloatLessThanOrEqual(ExprRef e) = 0;
+//  virtual void visitFloatGreaterThan(ExprRef e) = 0;
+//  virtual void visitFloatGreaterThanOrEqual(ExprRef e) = 0;
+//
+//  virtual void visitFloatAbs(ExprRef e) = 0;
+//  virtual void visitFloatAdd(ExprRef e) = 0;
+//  virtual void visitFloatSub(ExprRef e) = 0;
+//  virtual void visitFloatMul(ExprRef e) = 0;
+//  virtual void visitFloatDiv(ExprRef e) = 0;
+//  virtual void visitFloatRem(ExprRef e) = 0;
+//
+//  virtual void visitConvertToFloatFromFloat(ExprRef e) = 0;
+//  virtual void visitConvertToIEEEBitVectorFromFloat(ExprRef e) = 0;
+//  virtual void visitConvertToFloatFromIEEEBitVector(ExprRef e) = 0;
+//  virtual void visitConvertToFloatFromUnsignedBitVector(ExprRef e) = 0;
+//  virtual void visitConvertToFloatFromSignedBitVector(ExprRef e) = 0;
+//  virtual void visitConvertToUnsignedBitVectorFromFloat(ExprRef e) = 0;
+//  virtual void visitConvertToSignedBitVectorFromFloat(ExprRef e) = 0;
 
   /*
   virtual void visitFloatNeg(ExprRef e) = 0;

@@ -58,11 +58,9 @@ struct PCTreeNode {
   PCTreeNode() : constraint(nullptr), taken(false) {}
 
   PCTreeNode(qsym::ExprRef expr, fs::path input_file,
-             bool taken, uint32_t varBytes,
-             uint32_t currBB, uint32_t leftBB, uint32_t rightBB)
+             bool taken, uint32_t varBytes, uint32_t currBB)
       : constraint(std::move(expr)), input_file(std::move(input_file)),
-        taken(taken), varBytes(varBytes),
-        currBB(currBB), leftBB(leftBB), rightBB(rightBB){}
+        taken(taken), varBytes(varBytes),currBB(currBB){}
   qsym::ExprRef constraint;
   fs::path input_file;
   bool taken  = false;
@@ -70,8 +68,6 @@ struct PCTreeNode {
   uint32_t varBytes = 0;
   // Record basic block successor
   uint32_t currBB = -1;
-  uint32_t leftBB = -1;
-  uint32_t rightBB = -1;
 };
 
 typedef struct PCTreeNode PCTNode;
@@ -104,11 +100,6 @@ public:
   void updateBBWeight(uint32_t BBID){
     if (BBWeight[BBID] < 5)
       BBWeight[BBID] ++;
-  }
-
-  static trace getTrace(const TreeNode* node){
-    uint32_t dst = node->data.taken ? node->data.leftBB : node->data.rightBB;
-    return std::make_pair(node->data.currBB, dst);
   }
 
   TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);

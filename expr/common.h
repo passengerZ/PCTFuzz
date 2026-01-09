@@ -3,23 +3,14 @@
 
 #include "pin.H"
 #include "logging.h"
+#include "compiler.h"
 #include "allocation.h"
 #include <llvm/ADT/APSInt.h>
-#include <llvm/ADT/APFloat.h>
 
 #define EXPR_COMPLEX_LEVEL_THRESHOLD 4
 #define XXH_STATIC_LINKING_ONLY
 #include "xxhash.h"
 
-#define xglue(x, y) x ## y
-#define glue(x, y) xglue(x, y)
-
-#define likely(x)       __builtin_expect((x), 1)
-#define unlikely(x)     __builtin_expect((x), 0)
-
-inline void CRASH() {
-  ((void(*)())0)();
-}
 
 // inline REG getAx(USIZE size) {
 //   switch(size) {
@@ -92,6 +83,7 @@ inline ADDRINT getMask(ADDRINT size) {
       return 0xffffffffffffffff;
 #endif
     default:
+      CRASH();
       return -1;
   }
 }

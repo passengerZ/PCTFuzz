@@ -19,6 +19,6 @@
 #include "expr.h"
 
 typedef qsym::Expr *SymExpr;
-#include "RuntimeCommon.h"
+#include <RuntimeCommon.h>
 
 #endif

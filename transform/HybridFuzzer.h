@@ -404,7 +404,7 @@ public:
       , bitmap(output_dir / "bitmap")
       , command(insert_input_file(cmd, input_file)) {}
 
-  SymCCResult run(const fs::path& input, const fs::path& output_dir) {
+  SymCCResult run(const fs::path& input, const fs::path& output_dir, bool useSolver) {
     fs::copy_file(input, input_file, fs::copy_options::overwrite_existing);
 
     std::vector<std::string> args = {"timeout", "-k", "5", std::to_string(TIMEOUT)};
@@ -414,6 +414,12 @@ public:
     setenv("SYMCC_AFL_COVERAGE_MAP", bitmap.c_str(), 1);
     setenv("SYMCC_OUTPUT_DIR", output_dir.c_str(), 1);
     setenv("SYMCC_INPUT_FILE", input_file.c_str(), 1);
+
+    // control to use solver
+    if (useSolver)
+      setenv("SYMCC_ENABLE_SOLVER", "1", 1);
+    else
+      setenv("SYMCC_ENABLE_SOLVER", "0", 1);
 
 //    std::string cmdline;
 //    for (const auto& arg : args) cmdline += arg + " ";
@@ -480,7 +486,6 @@ public:
         if (entry.is_regular_file()) {
           if (entry.path().extension() != ".pct") {
             test_cases.push_back(entry.path());
-            std::cerr << "[zgf dbg] test_case : " << entry.path().string() << "\n";
           }
         }
       }
@@ -570,10 +575,10 @@ public:
   }
 
   SymCCResult concolic_execution(
-      const fs::path& input, SymCC& symcc, const AflConfig& afl_config) {
+      const fs::path& input, SymCC& symcc, const AflConfig& afl_config, bool useSolver) {
     clear_directory(oneout.path);
 
-    auto result = symcc.run(input, oneout.path);
+    auto result = symcc.run(input, oneout.path, useSolver);
     if (result.killed) {
       std::cerr << "The target process was killed (probably timeout or OOM); archiving to "
                 << hangs.path.string() << "\n";

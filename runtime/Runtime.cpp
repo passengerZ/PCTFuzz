@@ -17,6 +17,9 @@
 // Definitions that we need for the QSYM backend
 //
 
+#include "Runtime.h"
+#include "GarbageCollection.h"
+
 // C++
 #if __has_include(<filesystem>)
 #define HAVE_FILESYSTEM 1
@@ -59,14 +62,10 @@
 #include <llvm/ADT/ArrayRef.h>
 
 // Runtime
-#include "Config.h"
-#include "LibcWrappers.h"
-#include "Shadow.h"
-#include "GarbageCollection.h"
-#include "Runtime.h"
-
-// Protobuf
-#include "qsymExpr.pb.h"
+#include <Config.h>
+#include <LibcWrappers.h>
+#include <Shadow.h>
+#include <qsymExpr.pb.h>
 
 namespace qsym {
 
@@ -76,8 +75,6 @@ CallStackManager g_call_stack_manager;
 z3::context *g_z3_context;
 
 } // namespace qsym
-
-using namespace pct;
 
 namespace {
 
@@ -95,7 +92,6 @@ std::atomic_flag g_initialized = ATOMIC_FLAG_INIT;
 /// workload.
 std::map<SymExpr, qsym::ExprRef> allocatedExpressions;
 
-std::map<UINT32, SymbolicExpr> cached;
 SymExpr registerExpression(const qsym::ExprRef &expr) {
   SymExpr rawExpr = expr.get();
 
@@ -157,14 +153,11 @@ public:
 
 EnhancedQsymSolver *g_enhanced_solver;
 
-
 std::vector<BranchNode> branchConstaints;
-UINT32 currBB = 0;
-std::set<std::pair<UINT32, UINT32>> visTrace;
-int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
-int runSignal = 0;
+std::map<UINT32, pct::SymbolicExpr> cached;
 bool isReported = false;
-std::vector<std::pair<uintptr_t, uintptr_t>> BBStack;
+uint32_t currBBID;
+int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
 } // namespace
 
 using namespace qsym;
@@ -205,7 +198,8 @@ void _sym_initialize(void) {
   g_z3_context = new z3::context{};
   g_enhanced_solver = new EnhancedQsymSolver{};
   g_solver = g_enhanced_solver; // for QSYM-internal use
-  g_expr_builder = SymbolicExprBuilder::create();
+  g_expr_builder = g_config.pruning ? PruneExprBuilder::create()
+                                    : SymbolicExprBuilder::create();
 }
 
 SymExpr _sym_build_integer(uint64_t value, uint8_t bits) {
@@ -290,26 +284,6 @@ DEF_BINARY_EXPR_BUILDER(or, Or)
 DEF_BINARY_EXPR_BUILDER(bool_xor, Distinct)
 DEF_BINARY_EXPR_BUILDER(xor, Xor)
 
-//DEF_BINARY_EXPR_BUILDER(fp_add, FAdd)
-//DEF_BINARY_EXPR_BUILDER(fp_sub, FSub)
-//DEF_BINARY_EXPR_BUILDER(fp_mul, FMul)
-//DEF_BINARY_EXPR_BUILDER(fp_div, FDiv)
-//DEF_BINARY_EXPR_BUILDER(fp_rem, FRem)
-
-//DEF_BINARY_EXPR_BUILDER(float_ordered_greater_than, FOgt)
-//DEF_BINARY_EXPR_BUILDER(float_ordered_greater_equal, FOge)
-//DEF_BINARY_EXPR_BUILDER(float_ordered_less_than, FOlt)
-//DEF_BINARY_EXPR_BUILDER(float_ordered_less_equal, FOle)
-//DEF_BINARY_EXPR_BUILDER(float_ordered_equal, FOeq)
-//DEF_BINARY_EXPR_BUILDER(float_ordered_not_equal, FOne)
-//DEF_BINARY_EXPR_BUILDER(float_ordered, FOrd)
-//DEF_BINARY_EXPR_BUILDER(float_unordered, FUno)
-//DEF_BINARY_EXPR_BUILDER(float_unordered_greater_than, FUgt)
-//DEF_BINARY_EXPR_BUILDER(float_unordered_greater_equal, FUge)
-//DEF_BINARY_EXPR_BUILDER(float_unordered_less_than, FUlt)
-//DEF_BINARY_EXPR_BUILDER(float_unordered_less_equal, FUle)
-//DEF_BINARY_EXPR_BUILDER(float_unordered_equal, FUeq)
-//DEF_BINARY_EXPR_BUILDER(float_unordered_not_equal, FUne)
 #undef DEF_BINARY_EXPR_BUILDER
 
 SymExpr _sym_build_neg(SymExpr expr) {
@@ -352,64 +326,13 @@ SymExpr _sym_build_trunc(SymExpr expr, uint8_t bits) {
       g_expr_builder->createTrunc(allocatedExpressions.at(expr), bits));
 }
 
-//SymExpr _sym_build_float(double x, int is_double) {
-//  // We create an all-zeros bit vector, mainly to capture the length of the
-//  // value. This is compatible with our dummy implementation of
-//  // _sym_build_float_to_bits.
-//  llvm::APFloat val(x);
-//  return registerExpression(
-//      g_expr_builder->createConstantFloat(val, is_double ? 64 : 32));
-//}
-//
-//SymExpr _sym_build_fp_abs(SymExpr expr) {
-//  return registerExpression(
-//      g_expr_builder->createFAbs(allocatedExpressions[expr]));
-//}
-//
-//SymExpr _sym_build_int_to_float(SymExpr value, int is_double, int is_signed) {
-//  return registerExpression(g_expr_builder->intToFloat(
-//      allocatedExpressions[value], is_double, is_signed));
-//}
-//
-//SymExpr _sym_build_float_to_float(SymExpr expr, int to_double) {
-//  return registerExpression(
-//      g_expr_builder->floatToFloat(allocatedExpressions[expr], to_double));
-//}
-//
-//SymExpr _sym_build_bits_to_float(SymExpr expr, int to_double) {
-//  if (expr == nullptr)
-//    return nullptr;
-//
-//  return registerExpression(
-//      g_expr_builder->bitsToFloat(allocatedExpressions[expr], to_double));
-//}
-//
-//SymExpr _sym_build_float_to_bits(SymExpr expr) {
-//  if (expr == nullptr)
-//    return nullptr;
-//
-//  return registerExpression(
-//      g_expr_builder->floatToBits(allocatedExpressions[expr]));
-//}
-//
-//SymExpr _sym_build_float_to_signed_integer(SymExpr expr, uint8_t bits) {
-//  return registerExpression(
-//      g_expr_builder->floatToSignInt(allocatedExpressions[expr], bits));
-//}
-//
-//SymExpr _sym_build_float_to_unsigned_integer(SymExpr expr, uint8_t bits) {
-//  return registerExpression(
-//      g_expr_builder->floatToUnsignInt(allocatedExpressions[expr], bits));
-//}
-
 void _sym_push_path_constraint(SymExpr constraint, int taken,
-                               uintptr_t site_id,
-                               uintptr_t left_id,
-                               uintptr_t right_id) {
-  if (constraint == nullptr || constraint->isBool())
+                               uintptr_t site_id) {
+  if (constraint == nullptr)
     return;
 
-  g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
+  if (g_config.useSolver)
+    g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 
   if (branchConstaints.size() > 300)
     return;
@@ -420,8 +343,7 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
       taken == branchConstaints.back().taken)
     return;
 
-  std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n";
-  BranchNode bNode(constraint, taken, currBB, left_id, right_id);
+  BranchNode bNode(constraint, taken, currBBID);
   branchConstaints.push_back(bNode);
 }
 
@@ -507,44 +429,17 @@ UNSUPPORTED(SymExpr _sym_build_float_to_unsigned_integer(SymExpr, uint8_t))
 // Call-stack tracing
 //
 
-void recordBB(uintptr_t site_id){
-  BBStack.emplace_back(site_id, currBB);
-}
-
-void restoreBB(uintptr_t site_id) {
-  int num_elements_to_remove = 0;
-  for (auto it = BBStack.rbegin(); it != BBStack.rend(); it++) {
-    if (BBStack.back().first == site_id)
-      break;
-    num_elements_to_remove += 1;
-  }
-  for (int i = 0; i < num_elements_to_remove - 1; i++)
-    BBStack.pop_back();
-
-  uintptr_t dstBB = 0;
-  if (!BBStack.empty()){
-    dstBB = BBStack.back().second;
-    BBStack.pop_back();
-  }
-
-  visTrace.insert(std::make_pair(currBB, dstBB));
-  currBB = dstBB;
-}
-
 void _sym_notify_call(uintptr_t site_id) {
   g_call_stack_manager.visitCall(site_id);
-  recordBB(site_id);
 }
 
 void _sym_notify_ret(uintptr_t site_id) {
   g_call_stack_manager.visitRet(site_id);
-  restoreBB(site_id);
 }
 
-void _sym_notify_basic_block(uintptr_t bb_id) {
-  visTrace.insert(std::make_pair(currBB, bb_id));
-  currBB = bb_id;
-  g_call_stack_manager.visitBasicBlock(bb_id);
+void _sym_notify_basic_block(uintptr_t site_id) {
+  g_call_stack_manager.visitBasicBlock(site_id);
+  currBBID = site_id;
 }
 
 //
@@ -616,6 +511,7 @@ void symcc_set_test_case_handler(TestCaseHandler handler) {
   g_test_case_handler = handler;
 }
 
+
 //
 // Path Constaints Tree handling
 //
@@ -626,92 +522,80 @@ constexpr auto to_underlying(E e) noexcept{
 }
 
 unsigned MaxVarIndex = 0;
-SymbolicExpr serializeQsymExpr(SymExpr expr) {
+pct::SymbolicExpr serializeQsymExpr(SymExpr expr) {
   UINT32 hashValue = expr->hash();
   auto it = cached.find(hashValue);
   if (it != cached.end())
     return it->second;
 
-  SymbolicExpr res;
-  SymbolicExpr *child0, *child1, *child2;
+  pct::SymbolicExpr res;
+  pct::SymbolicExpr *child0, *child1, *child2;
 
   qsym::Kind k = expr->kind();
   assert(to_underlying(k) <= 79);
-  res.set_type(static_cast<ExprKind>(to_underlying(k)));
+  res.set_type(static_cast<pct::ExprKind>(to_underlying(k)));
   res.set_bits(expr->bits());
   res.set_hash(hashValue);
 
   switch (k) {
-  case Kind::Bool:
-    res.set_value(((BoolExpr *) (expr))->value());
-    break;
-  case Kind::Constant:
-    res.set_value(((ConstantExpr *) (expr))->value().getSExtValue());
-    break;
-  case Kind::Float:
-    res.set_value(
-        ((ConstantFloatExpr *) (expr))->value().bitcastToAPInt().getSExtValue());
-    break;
-  case Kind::Read:{
-    //ReadExpr has a _index of type uint32, so we are safe to assign it to a int64.
-    unsigned index = ((ReadExpr *) (expr))->index();
-    res.set_value(index);
-    res.set_name(("v_" + std::to_string(index)));
-    if (index + 1 > MaxVarIndex)
-      MaxVarIndex = index + 1;
-    break;
-  }
-  /* Unary Expression */
-  /// logical expression
-  case Kind::Neg: case Kind::Not: case Kind::LNot:
-  /// floating-point function
-  case Kind::FPToBV: case Kind::BVToFP: case Kind::FPToFP: case Kind::FPToSI:
-  case Kind::FPToUI: case Kind::SIToFP: case Kind::UIToFP: case Kind::FAbs:
-    /// extension operator: the targeted bit-width has been preserved
-  case Kind::ZExt: case Kind::SExt:
-    child0 = res.add_children();
-    *child0 = serializeQsymExpr(expr->getChild(0).get());
-    break;
-  case Kind::Extract:
-    child0 = res.add_children();
-    *child0 = serializeQsymExpr(expr->getChild(0).get());
-    res.set_value(((ExtractExpr *) (expr))->index());
-    break;
-    /* Binary Expression */
-    /// bit-vector expression
-  case Kind::Concat:
-  case Kind::Equal: case Kind::Distinct: case Kind::Ult: case Kind::Ule: case Kind::Ugt:
-  case Kind::Uge: case Kind::Slt: case Kind::Sle: case Kind::Sgt: case Kind::Sge:
-  case Kind::Add: case Kind::Sub: case Kind::Mul: case Kind::UDiv: case Kind::SDiv:
-  case Kind::URem: case Kind::SRem: case Kind::And: case Kind::Or: case Kind::Xor:
-  case Kind::Shl: case Kind::LShr: case Kind::AShr: case Kind::LOr: case Kind::LAnd:
-    /// floating-point expression
-  case Kind::FAdd: case Kind::FSub: case Kind::FMul: case Kind::FDiv: case Kind::FRem:
-  case Kind::FOgt: case Kind::FOge: case Kind::FOlt: case Kind::FOle: case Kind::FOne:
-  case Kind::FOeq: case Kind::FOrd: case Kind::FUne: case Kind::FUno:
-  case Kind::FUlt: case Kind::FUle: case Kind::FUgt: case Kind::FUge: case Kind::FUeq:
-    child0 = res.add_children();
-    child1 = res.add_children();
-    *child0 = serializeQsymExpr(expr->getChild(0).get());
-    *child1 = serializeQsymExpr(expr->getChild(1).get());
-    break;
-    /* Ternary Expression */
-  case Kind::Ite:
-    child0 = res.add_children();
-    child1 = res.add_children();
-    child2 = res.add_children();
-    *child0 = serializeQsymExpr(expr->getChild(0).get());
-    *child1 = serializeQsymExpr(expr->getChild(1).get());
-    *child2 = serializeQsymExpr(expr->getChild(2).get());
-    break;
-  case Kind::Rol:
-  case Kind::Ror:
-  case Kind::Invalid:
-    LOG_FATAL("Unsupported expression kind in serialization");
-    break;
-  default:
-    LOG_FATAL("Unknown expression kind in serialization");
-    break;
+    case Kind::Bool:
+      res.set_value(((BoolExpr *) (expr))->value());
+      break;
+    case Kind::Constant:
+      res.set_value(((ConstantExpr *) (expr))->value().getSExtValue());
+      break;
+    case Kind::Read:{
+      //ReadExpr has a _index of type uint32, so we are safe to assign it to a int64.
+      unsigned index = ((ReadExpr *) (expr))->index();
+      res.set_value(index);
+      res.set_name(("v_" + std::to_string(index)));
+      if (index + 1 > MaxVarIndex)
+        MaxVarIndex = index + 1;
+      break;
+    }
+      /* Unary Expression */
+      /// logical expression
+    case Kind::Neg: case Kind::Not: case Kind::LNot:
+      /// extension operator: the targeted bit-width has been preserved
+    case Kind::ZExt: case Kind::SExt:
+      child0 = res.add_children();
+      *child0 = serializeQsymExpr(expr->getChild(0).get());
+      break;
+    case Kind::Extract:
+      child0 = res.add_children();
+      *child0 = serializeQsymExpr(expr->getChild(0).get());
+      res.set_value(((ExtractExpr *) (expr))->index());
+      break;
+      /* Binary Expression */
+      /// bit-vector expression
+    case Kind::Concat:
+    case Kind::Equal: case Kind::Distinct: case Kind::Ult: case Kind::Ule: case Kind::Ugt:
+    case Kind::Uge: case Kind::Slt: case Kind::Sle: case Kind::Sgt: case Kind::Sge:
+    case Kind::Add: case Kind::Sub: case Kind::Mul: case Kind::UDiv: case Kind::SDiv:
+    case Kind::URem: case Kind::SRem: case Kind::And: case Kind::Or: case Kind::Xor:
+    case Kind::Shl: case Kind::LShr: case Kind::AShr: case Kind::LOr: case Kind::LAnd:
+      child0 = res.add_children();
+      child1 = res.add_children();
+      *child0 = serializeQsymExpr(expr->getChild(0).get());
+      *child1 = serializeQsymExpr(expr->getChild(1).get());
+      break;
+      /* Ternary Expression */
+    case Kind::Ite:
+      child0 = res.add_children();
+      child1 = res.add_children();
+      child2 = res.add_children();
+      *child0 = serializeQsymExpr(expr->getChild(0).get());
+      *child1 = serializeQsymExpr(expr->getChild(1).get());
+      *child2 = serializeQsymExpr(expr->getChild(2).get());
+      break;
+    case Kind::Rol:
+    case Kind::Ror:
+    case Kind::Invalid:
+      LOG_FATAL("Unsupported expression kind in serialization");
+      break;
+    default:
+      LOG_FATAL("Unknown expression kind in serialization");
+      break;
   }
 
   cached.insert(make_pair(hashValue, res));
@@ -754,7 +638,6 @@ uint32_t getTestCaseID() {
 }
 
 void _sym_handle_exit(int val) {
-  runSignal = val;
   _sym_report_path_constraint_sequence();
   exit(val);
 }
@@ -764,32 +647,21 @@ void _sym_report_path_constraint_sequence() {
     return;
   isReported = true;
 
-  ConstraintSequence cs;
-  cs.set_runsignal(runSignal);
+  pct::ConstraintSequence cs;
 
   for(const auto &e : branchConstaints) {
     if (e.constraint) {
       SymExpr constraint = e.constraint;
-//      std::cerr << "[zgf dbg] cons : " << constraint->toString() << "\n";
 
-      SequenceNode *node = cs.add_node();
+      pct::SequenceNode *node = cs.add_node();
       node->set_taken((e.taken > 0));
       node->set_b_id(e.currBB);
-      node->set_b_left(e.leftBB);
-      node->set_b_right(e.rightBB);
 
-      SymbolicExpr *expr = node->mutable_constraint();
+      pct::SymbolicExpr *expr = node->mutable_constraint();
       *expr = serializeQsymExpr(constraint);
     }
   }
   cs.set_varbytes(MaxVarIndex);
-
-  for(const auto &bbTrace: visTrace){
-    uint32_t srcBB = bbTrace.first;
-    uint32_t dstBB = bbTrace.second;
-    cs.add_bbid(srcBB);
-    cs.add_bbid(dstBB);
-  }
 
   std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);

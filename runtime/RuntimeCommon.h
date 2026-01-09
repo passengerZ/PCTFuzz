@@ -42,16 +42,11 @@ extern "C" {
 #endif
 
 struct BranchNode {
-  BranchNode(SymExpr expr, bool taken, uint32_t currBB, uint32_t leftBB, uint32_t rightBB)
-      : constraint(expr), taken(taken), currBB(currBB), leftBB(leftBB), rightBB(rightBB){}
+  BranchNode(SymExpr expr, bool taken, uint32_t currBB)
+      : constraint(expr), taken(taken), currBB(currBB){}
   SymExpr constraint;
   bool taken = false;
-  //char type  = 0;  // type : -1/0/1, assert=-1, common=0, assume=1
-
-  // Record basic block successor
   uint32_t currBB = -1;
-  uint32_t leftBB = -1;
-  uint32_t rightBB = -1;
 };
 
 /*
@@ -191,11 +186,8 @@ SymExpr _sym_get_return_expression(void);
 /*
  * Constraint handling
  */
-void _sym_push_path_constraint(nullable SymExpr constraint,
-                               int taken,
-                               uintptr_t site_id,
-                               uintptr_t left_id,
-                               uintptr_t right_id);
+void _sym_push_path_constraint(nullable SymExpr constraint, int taken,
+                               uintptr_t site_id);
 SymExpr _sym_get_input_byte(size_t offset, uint8_t concrete_value);
 void _sym_make_symbolic(const void *data, size_t byte_length,
                         size_t input_offset);

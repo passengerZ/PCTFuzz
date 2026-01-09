@@ -66,6 +66,9 @@ struct Config {
   /// 2GB on most workloads because requiring that amount of memory per core
   /// participating in the analysis seems reasonable.
   size_t garbageCollectionThreshold = 5'000'000;
+
+  /// if we use solver when concolic execution
+  bool useSolver = true;
 };
 
 /// The global configuration object.
