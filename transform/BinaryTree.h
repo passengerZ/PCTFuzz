@@ -15,7 +15,9 @@
 #include "expr.h"
 #include "expr_builder.h"
 #include "solver.h"
+#include "logging.h"
 #include "SearchStrategy.h"
+#include "qsymExpr.pb.h"
 
 namespace fs = std::filesystem;
 typedef std::pair<uint32_t, uint32_t> trace;
@@ -75,62 +77,50 @@ typedef Node<PCTNode> TreeNode;
 
 class ExecutionTree {
 public:
-  ExecutionTree(qsym::Solver *solver,
-                qsym::ExprBuilder *expr_builder,
-                SearchStrategy *searcher) :
-    g_solver(solver), g_expr_builder(expr_builder), g_searcher(searcher) {
+  ExecutionTree(qsym::ExprBuilder *expr_builder) :
+    g_expr_builder(expr_builder){
     root = new TreeNode();
   }
 
   ~ExecutionTree() { delete root; }
   TreeNode *getRoot() const { return root; }
 
-  int getLeftNodeSize() {
-    return static_cast<int>(getWillBeVisitedNodes(0).size());
-  }
+//  int getLeftNodeSize() {
+//    return static_cast<int>(getWillBeVisitedNodes(0).size());
+//  }
 
-  bool isExceptTerminal(TreeNode *node){
-    return !(node->data.constraint->kind() == qsym::Equal && node->data.taken);
-  }
-
-  bool updateCovTrace(trace& newVis) {
-    return g_searcher->updateCovTrace(newVis);
-  }
-
-  void updateBBWeight(uint32_t BBID){
-    if (BBWeight[BBID] < 5)
-      BBWeight[BBID] ++;
-  }
-
-  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
+  void updatePCTree(const fs::path &constraint_file, const fs::path &input);
 
   static TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
     return new Node<PCTNode>(parent, std::move(n));
   }
 
-  // Export all unvisited leaf nodes
-  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
-
   // Export all visited leaf nodes with a depth within N
   std::vector<TreeNode *> selectTerminalNodes(uint32_t depth);
 
-  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
-
-  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
-  std::vector<qsym::ExprRef> getRelaConstraints(
-      const TreeNode *srcNode, std::set<trace> *relaBranchTraces);
-  std::string generateTestCase(TreeNode *node);
+  // Export all unvisited leaf nodes
+//  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
+//  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
+//
+//  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
+//  std::vector<qsym::ExprRef> getRelaConstraints(
+//      const TreeNode *srcNode, std::set<trace> *relaBranchTraces);
+//  std::string generateTestCase(TreeNode *node);
 
   void printTree(uint32_t limitDepth, bool isFullPrint = false);
 
 private:
-  qsym::Solver *g_solver;
   qsym::ExprBuilder *g_expr_builder;
-  SearchStrategy *g_searcher;
 
   TreeNode *root;
+
+  std::map<UINT32, qsym::ExprRef> protoCached;
+
   std::set<const TreeNode*> fullCache;
-  std::map<uint32_t, uint32_t> BBWeight;
+
+  void deserializeToQsymExpr(
+      const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr);
+  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
 
   bool isFullyBuilt(const TreeNode* node);
 

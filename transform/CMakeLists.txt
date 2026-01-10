@@ -65,7 +65,7 @@ set(PCTFUZZSrc
   ${PCTFUZZ_SRC_DIR}/CXXProgram.cpp
   ${PCTFUZZ_SRC_DIR}/ExprASTVisitor.cpp
   ${PCTFUZZ_SRC_DIR}/TransformPass.cpp
-  ${PCTFUZZ_SRC_DIR}/PCTFuzzer.cpp
+  ${PCTFUZZ_SRC_DIR}/HybridFuzzer.cpp
   ${PROTO_SRCS}
 )
 

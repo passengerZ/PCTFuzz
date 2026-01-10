@@ -1,0 +1,177 @@
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
+#include <optional>
+
+#include "HybridFuzzer.h"
+#include "BinaryTree.h"
+#include "TransformPass.h"
+#include "call_stack_manager.h"
+#include "qsymExpr.pb.h"
+#include "solver.h"
+
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/raw_ostream.h"
+
+using namespace llvm;
+namespace fs = std::filesystem;
+using namespace std::chrono;
+
+// Command-line options
+cl::opt<std::string> FuzzerName(
+    "fuzzer-name", cl::desc("The name of the fuzzer to work with"), cl::Required);
+
+cl::opt<std::string> OutputDir(
+    "output-dir", cl::desc("The AFL output directory"), cl::Required);
+
+cl::opt<std::string> SymCCName(
+    "name", cl::desc("Name to use for SymCC"), cl::init("symcc"));
+
+cl::opt<std::string> SymCCTargetBin(
+    cl::Positional,
+    cl::desc("Program under test"),
+    cl::Required
+);
+
+constexpr seconds STATS_INTERVAL_SEC{60};
+
+uint32_t MAX_DEPTH = 50, curr_depth = 10;
+
+namespace qsym {
+ExprBuilder *g_expr_builder;
+Solver *g_solver;
+CallStackManager g_call_stack_manager;
+z3::context *g_z3_context;
+
+ExecutionTree *executionTree;
+
+std::set<uint32_t> lastExitNodes;
+
+bool build_pct_evaluator(State *state){
+  bool isNewEvaluator = false;
+
+  // step (4) : dump the visited leaf node to build failed pass
+  std::vector<TreeNode *> terminalNodes =
+      executionTree->selectTerminalNodes(curr_depth);
+  std::set<uint32_t> currTerminalIDs;
+  for (auto node : terminalNodes)
+    currTerminalIDs.insert(node->id);
+
+  bool hasChanged = currTerminalIDs != lastExitNodes;
+  std::cerr << "[PCT] Evaluator Changed: " << hasChanged
+            << ", Terminal Size: " << terminalNodes.size()
+            << ", Depth: " << curr_depth << "\n";
+
+  if (!hasChanged){
+    curr_depth += 2;
+    return isNewEvaluator;
+  }
+
+  PCT::TransformPass TP;
+  if(TP.buildEvaluator(executionTree, curr_depth)){
+    // update the changed exit nodes
+    lastExitNodes.clear();
+    lastExitNodes.insert(currTerminalIDs.begin(), currTerminalIDs.end());
+
+    TP.dumpEvaluator(state->evaluator_file.string());
+    isNewEvaluator = true;
+  }
+  return isNewEvaluator;
+}
+}
+// =============================================================================
+// Main
+// =============================================================================
+
+int main(int argc, char* argv[]) {
+  cl::ParseCommandLineOptions(argc, argv, "Make SymCC collaborate with AFL.\n");
+
+  std::string fuzzer_name_str = FuzzerName;
+  std::string output_dir_str  = OutputDir;
+  std::string symcc_name_str  = SymCCName;
+
+  fs::path output_dir(output_dir_str);
+  if (!fs::exists(output_dir) || !fs::is_directory(output_dir)) {
+    std::cerr << "The directory " << output_dir << " does not exist!\n";
+    return 1;
+  }
+
+  auto afl_queue = output_dir / fuzzer_name_str / "queue";
+  if (!fs::exists(afl_queue) || !fs::is_directory(afl_queue)) {
+    std::cerr << "The AFL queue " << afl_queue << " does not exist!\n";
+    return 1;
+  }
+
+  auto symcc_dir = output_dir / symcc_name_str;
+  if (fs::exists(symcc_dir)) {
+    std::cerr << symcc_dir << " already exists; resuming not supported\n";
+    return 1;
+  }
+
+  fs::path fuzzer_output = output_dir / fuzzer_name_str;
+  auto afl_config = AflConfig::load(fuzzer_output);
+  auto state = State::initialize(symcc_dir);
+
+  std::vector<std::string> symcc_command(afl_config.target_command);
+  symcc_command[0] = SymCCTargetBin.c_str();
+  SymCC symcc(symcc_dir, symcc_command);
+
+  qsym::g_expr_builder = qsym::SymbolicExprBuilder::create();
+  qsym::g_z3_context = new z3::context{};
+  qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, "");
+  executionTree = new ExecutionTree(g_expr_builder);
+
+  auto last_evaluator_time = std::chrono::steady_clock::now();
+  uint32_t EvaluatorTimeLimitSec = 30;
+
+  while (true) {
+    auto new_testcase = afl_config.best_new_testcase(state.processed_files);
+    if (!new_testcase.has_value()) {
+      std::this_thread::sleep_for(seconds(5));
+      continue;
+    }
+
+    // clean sync dir to collect DSE dumped testcases
+    state.sync.clean();
+    if (state.test_input(*new_testcase, symcc, afl_config,
+                           executionTree, true)) {
+      std::vector<fs::path> concolic_seeds =
+          afl_config.get_all_seeds(state.sync.path);
+      for (const auto& seed : concolic_seeds) {
+        state.test_input(seed, symcc, afl_config, executionTree, false);
+      }
+    }
+
+    // compute the evaluator
+    auto now = std::chrono::steady_clock::now();
+    bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
+
+    if (evaluator_limit && curr_depth < MAX_DEPTH){
+
+      if (build_pct_evaluator(&state)){
+        last_evaluator_time = now;
+
+        if (EvaluatorTimeLimitSec < 300)
+          EvaluatorTimeLimitSec += 30;
+
+        std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
+      }
+    }
+
+    if (duration_cast<seconds>(now - state.last_stats_output) > STATS_INTERVAL_SEC) {
+      if (!state.stats.log(state.stats_file)) {
+        std::cerr << "Failed to log statistics\n";
+      }
+      state.last_stats_output = now;
+    }
+  }
+
+  return 0;
+}

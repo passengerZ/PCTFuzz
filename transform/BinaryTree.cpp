@@ -1,7 +1,3 @@
-//
-// Created by Zhenbang Chen on 2020-03-22.
-//
-
 #include "BinaryTree.h"
 
 template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node);
@@ -15,7 +11,147 @@ template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node
     return output;
 }
 
+template <typename E> constexpr auto to_underlying(E e) noexcept {
+  return static_cast<std::underlying_type_t<E>>(e);
+}
+
 /////////////////////
+
+void ExecutionTree::deserializeToQsymExpr(
+    const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr) {
+  UINT32 hashValue = protoExpr.hash();
+  auto it = protoCached.find(hashValue);
+  if (it != protoCached.end()) {
+    qsymExpr = it->second;
+    return;
+  }
+
+  qsym::ExprRef child0, child1, child2;
+  pct::ExprKind exprKind = static_cast<pct::ExprKind>(protoExpr.type());
+  assert(to_underlying(exprKind) <= 79);
+
+  switch (exprKind) {
+  case pct::ExprKind::Bool: {
+    qsymExpr = g_expr_builder->createBool(protoExpr.value());
+    break;
+  }
+  case pct::ExprKind::Constant: {
+    qsymExpr = g_expr_builder->createConstant(protoExpr.value(),
+                                              protoExpr.bits());
+    break;
+  }
+  case pct::ExprKind::Read: {
+    // ReadExpr has a _index of type uint32, so we need to do a int64 t0 uint32
+    // translate.
+    uint32_t idx = protoExpr.value();
+    qsymExpr = g_expr_builder->createRead(idx);
+    break;
+  }
+  case pct::ExprKind::Extract: {
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    qsymExpr = g_expr_builder->createExtract(
+        child0, protoExpr.value() & 0xFFFFFFFF, protoExpr.bits());
+    break;
+  }
+  case pct::ExprKind::ZExt: {
+    uint32_t bits = protoExpr.bits();
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    qsymExpr = g_expr_builder->createZExt(child0, bits);
+    break;
+  }
+  case pct::ExprKind::SExt: {
+    uint32_t bits = protoExpr.bits();
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    qsymExpr = g_expr_builder->createSExt(child0, bits);
+    break;
+  }
+  case pct::ExprKind::Neg: case pct::ExprKind::Not:
+  case pct::ExprKind::LNot: {
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    qsymExpr = g_expr_builder->createUnaryExpr(
+        static_cast<qsym::Kind>(to_underlying(exprKind)), child0);
+    break;
+  }
+  case pct::ExprKind::Concat:{
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(1), child1);
+    qsymExpr = g_expr_builder->createConcat(child0, child1);
+    break;
+  }
+    // Binary arithmetic operators
+  case pct::ExprKind::Add: case pct::ExprKind::Sub: case pct::ExprKind::Mul:
+  case pct::ExprKind::UDiv: case pct::ExprKind::SDiv:
+  case pct::ExprKind::URem: case pct::ExprKind::SRem:
+  case pct::ExprKind::And: case pct::ExprKind::Or: case pct::ExprKind::Xor:
+  case pct::ExprKind::Shl: case pct::ExprKind::LShr: case pct::ExprKind::AShr:
+
+    // Binary relational operators
+  case pct::ExprKind::Equal: case pct::ExprKind::Distinct:
+  case pct::ExprKind::Ult: case pct::ExprKind::Ule:
+  case pct::ExprKind::Ugt: case pct::ExprKind::Uge:
+  case pct::ExprKind::Slt: case pct::ExprKind::Sle:
+  case pct::ExprKind::Sgt: case pct::ExprKind::Sge:
+  case pct::ExprKind::LOr: case pct::ExprKind::LAnd: {
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(1), child1);
+    qsymExpr = g_expr_builder->createBinaryExpr(
+        static_cast<qsym::Kind>(to_underlying(exprKind)), child0, child1);
+    break;
+  }
+  case pct::ExprKind::Ite: {
+    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(1), child1);
+    deserializeToQsymExpr(protoExpr.children(2), child2);
+    qsymExpr = g_expr_builder->createIte(child0, child1, child2);
+    break;
+  }
+
+    // Floating-point arithmetic operators
+
+    // Unknown operators
+  case pct::ExprKind::Rol:
+  case pct::ExprKind::Ror:
+  case pct::ExprKind::Invalid:
+    qsym::LOG_FATAL("Unsupported expression kind in deserialization");
+    break; // to silence the compiler warning
+  default:
+    qsym::LOG_FATAL("Unknown expression kind in deserialization");
+    break;
+  }
+  protoCached.insert(make_pair(hashValue, qsymExpr));
+}
+
+void ExecutionTree::updatePCTree(
+    const fs::path &constraint_file, const fs::path &input) {
+  ifstream inputf(constraint_file, std::ofstream::in | std::ofstream::binary);
+  if (inputf.fail()){
+    std::cerr << "Unable to open a file ["
+              << constraint_file <<"] to update Path Constaint Tree\n";
+    return;
+  }
+
+  pct::ConstraintSequence cs;
+  cs.ParseFromIstream(&inputf);
+
+  qsym::ExprRef pathCons;
+  TreeNode *currNode = getRoot();
+  for (int i = 0; i < cs.node_size(); i++) {
+    const pct::SequenceNode &pnode = cs.node(i);
+    if (!pnode.has_constraint())
+      continue;
+
+    bool branchTaken = pnode.taken() > 0;
+
+    deserializeToQsymExpr(pnode.constraint(), pathCons);
+//    std::cerr << "[zgf dbg] idx : " << i << " " << pathCons->toString() << "\n";
+    PCTNode pctNode(pathCons, input, branchTaken, 0, pnode.b_id());
+
+    currNode = updateTree(currNode, pctNode);
+    if (currNode == getRoot())
+      break;
+  }
+
+}
 
 bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
   if (fullCache.find(node) != fullCache.end()) {
@@ -143,33 +279,6 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
   return currNode;
 }
 
-std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes(uint32_t N) {
-  std::vector<TreeNode*> willbeVisited;
-  if (!root) return willbeVisited;
-
-  std::queue<TreeNode*> worklist;
-  worklist.push(root);
-
-  while (!worklist.empty()) {
-    TreeNode *node = worklist.front();
-    worklist.pop();
-
-    if (isFullyBuilt(node))
-      continue;
-
-    if (node->status == WillbeVisit && node != root)
-      willbeVisited.push_back(node);
-
-    if (N != 0 && willbeVisited.size() >= N)
-      break;
-
-    if (node->left)  worklist.push(node->left);
-    if (node->right) worklist.push(node->right);
-  }
-
-  return willbeVisited;
-}
-
 std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
   std::vector<TreeNode*> hasVisited;
   if (!root) return hasVisited;
@@ -196,6 +305,34 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
   }
 
   return hasVisited;
+}
+
+/*
+std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes(uint32_t N) {
+  std::vector<TreeNode*> willbeVisited;
+  if (!root) return willbeVisited;
+
+  std::queue<TreeNode*> worklist;
+  worklist.push(root);
+
+  while (!worklist.empty()) {
+    TreeNode *node = worklist.front();
+    worklist.pop();
+
+    if (isFullyBuilt(node))
+      continue;
+
+    if (node->status == WillbeVisit && node != root)
+      willbeVisited.push_back(node);
+
+    if (N != 0 && willbeVisited.size() >= N)
+      break;
+
+    if (node->left)  worklist.push(node->left);
+    if (node->right) worklist.push(node->right);
+  }
+
+  return willbeVisited;
 }
 
 std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
@@ -254,6 +391,7 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
   return result;
 }
 
+
 std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode){
   std::vector<qsym::ExprRef> constraints;
 
@@ -269,6 +407,7 @@ std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode
   }
   return constraints;
 }
+
 
 std::string ExecutionTree::generateTestCase(TreeNode *node){
   fs::path input_file = node->data.input_file;
@@ -293,4 +432,4 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
     node->status = UnReachable;
 
   return new_case;
-}
+}*/

@@ -151,30 +151,30 @@ void Solver::setInputFile(const std::string &input_file) {
   readInput();
 }
 
-  std::string Solver::fetchTestcase() {
-    std::string fname;
-    if (check() != z3::sat) {
-      LOG_DEBUG("unsat\n");
-      return fname;
-    }
-
-    std::vector<UINT8> values = getConcreteValues();
-
-    fname = out_dir_+ "/pct_" + toString6digit(num_generated_);
-    ofstream of(fname, std::ofstream::out | std::ofstream::binary);
-    if (of.fail())
-      LOG_FATAL("Unable to open a file to write results\n");
-
-    // highperformace write
-    if (!values.empty()) {
-      of.write(reinterpret_cast<const char*>(values.data()),
-               static_cast<std::streamsize>(values.size()));
-    }
-
-    of.close();
-    num_generated_++;
+std::string Solver::fetchTestcase() {
+  std::string fname;
+  if (check() != z3::sat) {
+    LOG_DEBUG("unsat\n");
     return fname;
   }
+
+  std::vector<UINT8> values = getConcreteValues();
+
+  fname = out_dir_+ "/pct_" + toString6digit(num_generated_);
+  ofstream of(fname, std::ofstream::out | std::ofstream::binary);
+  if (of.fail())
+    LOG_FATAL("Unable to open a file to write results\n");
+
+  // highperformace write
+  if (!values.empty()) {
+    of.write(reinterpret_cast<const char*>(values.data()),
+             static_cast<std::streamsize>(values.size()));
+  }
+
+  of.close();
+  num_generated_++;
+  return fname;
+}
 
 bool Solver::checkAndSave(const std::string& postfix) {
   if (check() == z3::sat) {

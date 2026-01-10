@@ -277,7 +277,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
   program = std::make_shared<CXXProgram>();
 
   std::vector<TreeNode *> terminalNodes =
-      executionTree->selectWillBeVisitedNodes(depth);
+      executionTree->selectTerminalNodes(depth);
   if (terminalNodes.size() < 2)
     return false;
 
@@ -289,16 +289,11 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
   uint32_t g_read_idx = 0, curr_read_idx = 0, curr_read_max = 0;
 
   // Generate constraint branches
-  std::set<TreeNode *> ancestorNodes;
   for (TreeNode *leafNode : terminalNodes){
     auto currNode = leafNode;
 
     curr_read_max = 0;
     while (currNode != executionTree->getRoot()) {
-      // stop to dump ancestor nodes
-      if (ancestorNodes.count(currNode) != 0)
-        break;
-
       curr_read_idx = findReadIdx(currNode->data.constraint);
       if (curr_read_idx > curr_read_max)
         curr_read_max = curr_read_idx;
@@ -313,11 +308,13 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
     currNode = leafNode;
     std::vector<std::string> conditions;
     while (currNode != executionTree->getRoot()) {
-      // stop to dump ancestor nodes
-      if (ancestorNodes.count(currNode) != 0)
-        break;
-
       qsym::ExprRef expr = currNode->data.constraint;
+
+      if (expr->isBool()){
+        currNode = currNode->parent;
+        continue;
+      }
+
       doDFSPostOrderTraversal(expr);
 
       std::string condition(getSymbolFor(expr));
@@ -329,13 +326,6 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
     }
 
     if (conditions.empty()) continue;
-
-    if (leafNode->parent){
-      if (leafNode->parent->left)
-        ancestorNodes.insert(leafNode->parent->left);
-      if (leafNode->parent->right)
-        ancestorNodes.insert(leafNode->parent->right);
-    }
 
     std::string exitIfCondition;
     unsigned idx = conditions.size() - 1;
