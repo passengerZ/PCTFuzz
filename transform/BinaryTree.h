@@ -86,7 +86,7 @@ public:
   TreeNode *getRoot() const { return root; }
 
   int getLeftNodeSize() {
-    return static_cast<int>(getWillBeVisitedNodes().size());
+    return static_cast<int>(getWillBeVisitedNodes(0).size());
   }
 
   bool isExceptTerminal(TreeNode *node){
@@ -109,7 +109,7 @@ public:
   }
 
   // Export all unvisited leaf nodes
-  std::vector<TreeNode *> getWillBeVisitedNodes();
+  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
 
   // Export all visited leaf nodes with a depth within N
   std::vector<TreeNode *> selectTerminalNodes(uint32_t depth);

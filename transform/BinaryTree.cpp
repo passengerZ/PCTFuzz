@@ -143,7 +143,7 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
   return currNode;
 }
 
-std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() {
+std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes(uint32_t N) {
   std::vector<TreeNode*> willbeVisited;
   if (!root) return willbeVisited;
 
@@ -159,6 +159,9 @@ std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes() {
 
     if (node->status == WillbeVisit && node != root)
       willbeVisited.push_back(node);
+
+    if (N != 0 && willbeVisited.size() >= N)
+      break;
 
     if (node->left)  worklist.push(node->left);
     if (node->right) worklist.push(node->right);
@@ -197,7 +200,7 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
 
 std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
   // re-compute the tobe visited nodes
-  std::vector<TreeNode *> allNodes = getWillBeVisitedNodes();
+  std::vector<TreeNode *> allNodes = getWillBeVisitedNodes(N);
   size_t total = allNodes.size();
   if (total < N)
     return allNodes;

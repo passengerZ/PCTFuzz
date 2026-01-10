@@ -58,6 +58,7 @@ ExecutionTree *executionTree;
 
 std::set<uint32_t> lastExitNodes;
 uint32_t MAX_DEPTH = 50, curr_depth = 10;
+uint32_t ByteLimit = 1024 * 1024;
 
 template <typename E> constexpr auto to_underlying(E e) noexcept {
   return static_cast<std::underlying_type_t<E>>(e);
@@ -196,14 +197,12 @@ void updatePCTree(const fs::path &constraint_file, const fs::path &input) {
       break;
   }
 
-  return;
 }
 
-void execute_fuzzer(
-    std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
-
+void execute_fuzzer(std::string input, State *state,
+                    SymCC *symcc, AflConfig* afl_config){
   // avoid symcc to failed open afl-busy seed
-  fs::path currInput = state->copy_testcase_to_dir(input, state->seen, false);
+  fs::path currInput = state->copy_testcase_to_dir(input, state->sync, true);
   input = currInput.string();
   if (input.empty())
     return;
@@ -211,18 +210,24 @@ void execute_fuzzer(
   // merge AFL new input into current Bitmap
   state->evaluate_new_testcase(
       input, symcc->work_dir, *afl_config, true);
-  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config, true);
+  SymCCResult symccRes = state->concolic_execution(
+      input, *symcc, *afl_config, true);
   qsym::updatePCTree(symccRes.constraint_file, input);
 
   for (const auto& new_test : symccRes.test_cases){
     state->evaluate_new_testcase(
         new_test, symcc->work_dir, *afl_config, false);
+    // collected concolic execution dumped testcases
+    state->copy_testcase_to_dir(new_test, state->sync, false);
   }
 }
 
-void execute_dse(std::string input, State *state, SymCC *symcc, AflConfig* afl_config){
-  SymCCResult symccRes = state->concolic_execution(input, *symcc, *afl_config, false);
+void execute_dse(std::string input, State *state,
+                 SymCC *symcc, AflConfig* afl_config){
+  SymCCResult symccRes = state->concolic_execution(
+      input, *symcc, *afl_config, false);
   qsym::updatePCTree(symccRes.constraint_file, input);
+
   state->evaluate_new_testcase(
         input, symcc->work_dir, *afl_config, false);
 }
@@ -317,14 +322,10 @@ int main (int argc, char* argv[]){
   qsym::executionTree = new ExecutionTree(g_solver, g_expr_builder, g_searcher);
 
   auto start_time = std::chrono::steady_clock::now();
-  auto last_new_afl_time = start_time;
   auto last_evaluator_time = start_time;
-  unsigned consecutive_empty_rounds = 0;
 
-  uint32_t PollInterval = 2;
-  uint32_t MaxEmptyRounds = 2;
+  uint32_t PollInterval = 5;
   uint32_t BatchSeedSize = 64;
-  uint32_t NoNewTimeoutSec = 20;
   uint32_t EvaluatorTimeLimitSec = 30;
 
   while (true) {
@@ -333,62 +334,55 @@ int main (int argc, char* argv[]){
     std::vector<fs::path> covnew_seeds =
         afl_config.get_unseen_seeds(afl_queue, state.processed_seeds);
 
-    auto now = std::chrono::steady_clock::now();
-
-    if (covnew_seeds.empty()) {
-      consecutive_empty_rounds++;
-      bool timeout_no_new = (std::chrono::duration_cast<std::chrono::seconds>(
-          now - last_new_afl_time).count() >= NoNewTimeoutSec);
-      bool too_many_empty = (consecutive_empty_rounds >= MaxEmptyRounds);
-
-      if (timeout_no_new || too_many_empty) {
-        std::vector<TreeNode*> tobeExplore =
-            executionTree->selectWillBeVisitedNodes(BatchSeedSize);
-
-        solved_pct(&tobeExplore, &state, &symcc, &afl_config);
-        std::cerr << "[PCT] SMT Selected " << tobeExplore.size() << " nodes, Now testcases is "
-                  << state.solved.current_id <<".\n";
-
-        consecutive_empty_rounds = 0;
-        PollInterval ++;
-        MaxEmptyRounds ++;
-        if (PollInterval > 10) PollInterval = 1;
-        if (MaxEmptyRounds > 10) MaxEmptyRounds = 1;
-
-        last_new_afl_time = now; // 视为有“活动”
-
-        // by the way to compute evaluator
-        bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
-            now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
-        if (evaluator_limit && curr_depth < MAX_DEPTH){
-          last_evaluator_time = now;
-
-          // step (4) : dump the visited leaf node to build failed pass
-          if (build_pct_evaluator(&state)){
-            if (EvaluatorTimeLimitSec < 60)
-              EvaluatorTimeLimitSec += 10;
-
-            std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
-          }
-        }
-      }
-
+    if (covnew_seeds.empty())
       continue;
-    }
-
-    // === 有新 AFL 输入 ===
-    consecutive_empty_rounds = 0;
-    last_new_afl_time = now;
 
     uint32_t seedSize = covnew_seeds.size();
     std::cerr << "[PCT] Got " << seedSize << " new AFL test cases.\n";
+
+    // must clean sync dir before
+    state.sync.clean();
+
+
+
     for (const auto& input : covnew_seeds) {
       state.processed_seeds.insert(input);
-      if (seedSize <= 2 * BatchSeedSize)
-        execute_fuzzer(input.string(), &state, &symcc, &afl_config);
+      if (get_file_bytes(input) > ByteLimit)
+        continue;
+      execute_fuzzer(input.string(), &state, &symcc, &afl_config);
     }
 
-    // === 原有的 stats 输出逻辑 ===
+    // use concolic execution dumped testcase to rebuild PCT
+    std::vector<fs::path> concolic_seeds =
+        afl_config.get_all_seeds(state.sync.path);
+    for (const auto& input : concolic_seeds) {
+      execute_dse(input.string(), &state, &symcc, &afl_config);
+    }
+
+    // compute the evaluator
+    auto now = std::chrono::steady_clock::now();
+    bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
+
+    if (evaluator_limit && curr_depth < MAX_DEPTH){
+      std::vector<TreeNode*> tobeExplore =
+          executionTree->getWillBeVisitedNodes(2 * BatchSeedSize);
+
+      solved_pct(&tobeExplore, &state, &symcc, &afl_config);
+      std::cerr << "[PCT] SMT Selected " << tobeExplore.size()
+                << " nodes, Now testcases is "
+                << state.solved.current_id <<".\n";
+
+      if (build_pct_evaluator(&state)){
+        last_evaluator_time = now;
+
+        if (EvaluatorTimeLimitSec < 300)
+          EvaluatorTimeLimitSec += 30;
+
+        std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
+      }
+    }
+
     if (now - state.last_stats_output > STATS_INTERVAL_SEC) {
       try {
         state.stats.log(state.stats_file);

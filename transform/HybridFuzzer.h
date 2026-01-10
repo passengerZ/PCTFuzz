@@ -57,31 +57,15 @@ std::vector<std::string> insert_input_file(const std::vector<std::string>& comma
   return fixed;
 }
 
-inline bool remove_file(const fs::path& p) {
-  if (!fs::exists(p) || fs::is_directory(p)) {
-    return true;
+std::uintmax_t get_file_bytes(const std::string& path) {
+  try {
+    return std::filesystem::file_size(path);
+  } catch (const std::filesystem::filesystem_error& e) {
+    std::cerr << "Error: " << e.what() << '\n';
+    return static_cast<std::uintmax_t>(-1);
   }
-  std::error_code ec;
-  return fs::remove(p, ec);
 }
 
-bool clear_directory(const fs::path& dir) {
-  std::error_code ec;
-
-  fs::remove_all(dir, ec);
-  if (ec && ec != std::errc::no_such_file_or_directory) {
-    std::cerr << "Error removing directory " << dir << ": " << ec.message() << "\n";
-    return false;
-  }
-
-  fs::create_directory(dir, ec);
-  if (ec) {
-    std::cerr << "Error recreating directory " << dir << ": " << ec.message() << "\n";
-    return false;
-  }
-
-  return true;
-}
 
 // ----------------------------
 // AflMap
@@ -181,6 +165,24 @@ public:
   explicit TestcaseDir(const fs::path& p) : path(p) {
     fs::create_directory(path);
   }
+
+  void clean(){
+    std::error_code ec;
+
+    fs::remove_all(path, ec);
+    if (ec && ec != std::errc::no_such_file_or_directory) {
+      std::cerr << "Error removing directory " << path.string()
+                << ": " << ec.message() << "\n";
+    }
+
+    fs::create_directory(path, ec);
+    if (ec) {
+      std::cerr << "Error recreating directory " << path.string()
+                << ": " << ec.message() << "\n";
+    }
+
+    current_id = 0;
+  }
 };
 
 // ----------------------------
@@ -267,6 +269,17 @@ public:
         fuzzer_output / "queue",
         input_dir
     };
+  }
+
+  std::vector<fs::path> get_all_seeds(fs::path &dir) const {
+    std::vector<fs::path> candidates;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+      if (entry.is_regular_file() &&
+          starts_with(entry.path().filename().string(), "id:0")) {
+        candidates.push_back(entry.path());
+      }
+    }
+    return candidates;
   }
 
   std::vector<fs::path> get_unseen_seeds(
@@ -550,7 +563,7 @@ class State {
 public:
   AflMap current_bitmap;
   std::set<fs::path> processed_seeds;
-  TestcaseDir queue, hangs, crashes, oneout, seen, solved;
+  TestcaseDir queue, hangs, crashes, oneout, sync, solved;
   Stats stats;
   std::ofstream stats_file;
   fs::path evaluator_file;
@@ -565,7 +578,7 @@ public:
         .hangs      = TestcaseDir{output_dir / "hangs"},
         .crashes    = TestcaseDir{output_dir / "crashes"},
         .oneout     = TestcaseDir{output_dir / "oneout"},
-        .seen       = TestcaseDir{output_dir / "seen"},
+        .sync       = TestcaseDir{output_dir / "sync"},
         .solved     = TestcaseDir{output_dir / "solved"},
         .stats      = {},
         .stats_file = std::ofstream{output_dir / "stats"},
@@ -576,7 +589,7 @@ public:
 
   SymCCResult concolic_execution(
       const fs::path& input, SymCC& symcc, const AflConfig& afl_config, bool useSolver) {
-    clear_directory(oneout.path);
+    oneout.clean();
 
     auto result = symcc.run(input, oneout.path, useSolver);
     if (result.killed) {
