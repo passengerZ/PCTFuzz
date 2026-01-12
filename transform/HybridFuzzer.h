@@ -38,6 +38,15 @@ bool starts_with(const std::string& str, const std::string& prefix) {
   return str.compare(0, prefix.size(), prefix) == 0;
 }
 
+std::string get_origin_id(const fs::path& testcase){
+  auto filename = testcase.filename().string();
+  // starts with "id:"
+  if (filename.find("id:") != 0)
+    return "";
+
+  return filename.substr(3, 6);
+}
+
 std::vector<std::string> insert_input_file(const std::vector<std::string>& command,
                                            const fs::path& input_file) {
   std::vector<std::string> fixed = command;
@@ -199,6 +208,7 @@ public:
   bool use_standard_input;
   bool use_qemu_mode;
   fs::path queue;
+  std::set<std::string> visTestcaseID;
 
   static AflConfig load(const fs::path& fuzzer_output) {
     fs::path stats_file = fuzzer_output / "fuzzer_stats";
@@ -249,12 +259,15 @@ public:
     bool use_stdin = std::find(target_cmd.begin(), target_cmd.end(), "@@") == target_cmd.end();
     bool qemu_mode = std::find(tokens.begin(), tokens.end(), "-Q") != tokens.end();
 
+    std::set<std::string> visTestcaseID;
+
     return AflConfig{
         afl_binary_dir / "afl-showmap",
         target_cmd,
         use_stdin,
         qemu_mode,
-        fuzzer_output / "queue"
+        fuzzer_output / "queue",
+        visTestcaseID
     };
   }
 
@@ -269,11 +282,26 @@ public:
     return candidates;
   }
 
+  std::vector<fs::path> get_unvis_seeds(
+      fs::path &dir, const std::set<fs::path>& seen) const {
+    std::vector<fs::path> candidates;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+      if (entry.is_regular_file() &&
+          seen.find(entry.path()) == seen.end() &&
+          starts_with(entry.path().filename().string(), "id:")) {
+        candidates.push_back(entry.path());
+      }
+    }
+    return candidates;
+  }
+
   std::optional<fs::path> best_new_testcase(const std::set<fs::path>& seen) {
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(queue)) {
       if (entry.is_regular_file() && seen.find(entry.path()) == seen.end()) {
-        candidates.push_back(entry.path());
+        std::string entryID = get_origin_id(entry.path());
+        if (visTestcaseID.find(entryID) == visTestcaseID.end())
+          candidates.push_back(entry.path());
       }
     }
 
@@ -404,7 +432,7 @@ public:
     return std::chrono::microseconds(times.back());
   }
 
-  static void copy_testcase(
+  static fs::path copy_testcase(
       const fs::path& testcase,
       TestcaseDir& target_dir,
       const fs::path& parent
@@ -418,7 +446,7 @@ public:
 
     // starts with "id:"
     if (orig_name.find("id:") != 0)
-      return;
+      return "";
 
     std::string orig_id = orig_name.substr(3, 6); // [3, 9)
 
@@ -440,6 +468,7 @@ public:
     }
 
     target_dir.current_id++;
+    return target;
   }
 
   SymCCResult run(const fs::path& input,
@@ -650,7 +679,7 @@ struct Stats {
 class State {
 public:
   AflMap current_bitmap;
-  std::set<fs::path> processed_files;
+  std::set<fs::path> processed_files, concoliced_files;
   TestcaseDir queue;
   TestcaseDir hangs;
   TestcaseDir crashes;
@@ -663,8 +692,9 @@ public:
   static State initialize(const fs::path& output_dir) {
     fs::create_directory(output_dir);
     return State{
-        .current_bitmap = AflMap{},
-        .processed_files = {},
+        .current_bitmap   = AflMap{},
+        .processed_files  = {},
+        .concoliced_files = {},
         .queue      = TestcaseDir{output_dir / "queue"},
         .hangs      = TestcaseDir{output_dir / "hangs"},
         .crashes    = TestcaseDir{output_dir / "crashes"},
@@ -676,11 +706,10 @@ public:
     };
   }
 
-  bool test_input(const fs::path& input,
-                  const SymCC& symcc,
-                  const AflConfig& afl_config,
-                  ExecutionTree *executionTree,
-                  bool is_fuzz_mode) {
+  bool run_afl_input(const fs::path& input,
+                     const SymCC& symcc,
+                     const AflConfig& afl_config,
+                     ExecutionTree *executionTree) {
 //    std::cerr << "Running on input " << input << "\n";
 
     fs::path tmp_dir;
@@ -707,17 +736,14 @@ public:
 
     uint64_t num_total = 0, num_interesting = 0;
     SymCCResult symccRes = symcc.run(
-        input, tmp_dir / "output", is_fuzz_mode);
+        input, tmp_dir / "output", true);
     executionTree->updatePCTree(symccRes.constraint_file, input);
 
     for (const auto& new_test : symccRes.test_cases) {
-      // collect all test_cases generated
-      if (is_fuzz_mode)
-        SymCC::copy_testcase(new_test, sync, new_test);
-
       auto res = process_new_testcase(new_test, input, tmp_dir, afl_config);
       num_total++;
-      if (res == TestcaseResult::New) {
+      if (res == TestcaseResult::New){
+        // collect all test_cases generated
         num_interesting++;
       }
     }
@@ -731,6 +757,44 @@ public:
     }
 
     processed_files.insert(input);
+    stats.add_execution(symccRes);
+    cleanup();
+    return true;
+  }
+
+  bool run_symcc_input(const fs::path& input,
+                       const SymCC& symcc,
+                       const AflConfig& afl_config,
+                       ExecutionTree *executionTree) {
+    fs::path tmp_dir;
+    {
+      const char* tmpdir_env = std::getenv("TMPDIR");
+      std::string tmp_base = tmpdir_env ? tmpdir_env : "/tmp";
+      std::string pattern = fs::path(tmp_base) / "symcc-XXXXXX";
+
+      std::vector<char> buffer(pattern.begin(), pattern.end());
+      buffer.push_back('\0');
+
+      char* result = mkdtemp(buffer.data());
+      if (!result) {
+        std::cerr << "Failed to create unique temp directory: " << strerror(errno) << "\n";
+        return false;
+      }
+      tmp_dir = fs::path(result);
+    }
+
+    auto cleanup = [&tmp_dir]() {
+      std::error_code ec;
+      fs::remove_all(tmp_dir, ec);
+    };
+
+    SymCCResult symccRes = symcc.run(
+        input, tmp_dir / "output", false);
+    executionTree->updatePCTree(symccRes.constraint_file, input);
+
+    process_new_testcase(input, input, tmp_dir, afl_config);
+
+    concoliced_files.insert(input);
     stats.add_execution(symccRes);
     cleanup();
     return true;

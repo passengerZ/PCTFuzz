@@ -53,6 +53,21 @@ ExecutionTree *executionTree;
 
 std::set<uint32_t> lastExitNodes;
 
+void solved_pct(std::vector<TreeNode *> *tobeExplores,
+                State *state, SymCC *symcc, AflConfig* afl_config){
+  if (tobeExplores->empty())
+    return ;
+
+  for (auto node : *tobeExplores){
+    std::string testcase = executionTree->generateTestCase(node);
+    if (testcase.empty())
+      continue;
+
+    state->run_symcc_input(testcase, *symcc, *afl_config, executionTree);
+    state->solved.current_id++;
+  }
+}
+
 bool build_pct_evaluator(State *state){
   bool isNewEvaluator = false;
 
@@ -69,7 +84,6 @@ bool build_pct_evaluator(State *state){
             << ", Depth: " << curr_depth << "\n";
 
   if (!hasChanged){
-    curr_depth += 2;
     return isNewEvaluator;
   }
 
@@ -82,6 +96,7 @@ bool build_pct_evaluator(State *state){
     TP.dumpEvaluator(state->evaluator_file.string());
     isNewEvaluator = true;
   }
+
   return isNewEvaluator;
 }
 }
@@ -125,7 +140,7 @@ int main(int argc, char* argv[]) {
   qsym::g_expr_builder = qsym::SymbolicExprBuilder::create();
   qsym::g_z3_context = new z3::context{};
   qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, "");
-  executionTree = new ExecutionTree(g_expr_builder);
+  executionTree = new ExecutionTree(g_expr_builder, g_solver);
 
   auto last_evaluator_time = std::chrono::steady_clock::now();
   uint32_t EvaluatorTimeLimitSec = 30;
@@ -138,15 +153,11 @@ int main(int argc, char* argv[]) {
     }
 
     // clean sync dir to collect DSE dumped testcases
-    state.sync.clean();
-    if (state.test_input(*new_testcase, symcc, afl_config,
-                           executionTree, true)) {
-      std::vector<fs::path> concolic_seeds =
-          afl_config.get_all_seeds(state.sync.path);
-      for (const auto& seed : concolic_seeds) {
-        state.test_input(seed, symcc, afl_config, executionTree, false);
-      }
-    }
+    afl_config.visTestcaseID.insert(get_origin_id(new_testcase.value()));
+    fs::path local_afl_seed = symcc.copy_testcase(
+        *new_testcase, state.sync, new_testcase.value());
+
+    state.run_afl_input(local_afl_seed, symcc, afl_config, executionTree);
 
     // compute the evaluator
     auto now = std::chrono::steady_clock::now();
@@ -155,14 +166,29 @@ int main(int argc, char* argv[]) {
 
     if (evaluator_limit && curr_depth < MAX_DEPTH){
 
+      std::vector<fs::path> unvis_seeds =
+          afl_config.get_unvis_seeds(state.queue.path, state.concoliced_files);
+
+      for (auto ce_seed : unvis_seeds){
+        state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
+      }
+
+      // make sure in curr_depth, there are no willbeVisited nodes
+      std::vector<TreeNode *> willbeVisit =
+          executionTree->selectWillBeVisitedNodes(curr_depth);
+
+      solved_pct(&willbeVisit, &state, &symcc, &afl_config);
+
       if (build_pct_evaluator(&state)){
         last_evaluator_time = now;
 
-        if (EvaluatorTimeLimitSec < 300)
-          EvaluatorTimeLimitSec += 30;
+        if (EvaluatorTimeLimitSec < 600)
+          EvaluatorTimeLimitSec += 60;
 
         std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
       }
+
+      curr_depth += 5;
     }
 
     if (duration_cast<seconds>(now - state.last_stats_output) > STATS_INTERVAL_SEC) {

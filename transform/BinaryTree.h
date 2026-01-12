@@ -77,8 +77,8 @@ typedef Node<PCTNode> TreeNode;
 
 class ExecutionTree {
 public:
-  ExecutionTree(qsym::ExprBuilder *expr_builder) :
-    g_expr_builder(expr_builder){
+  ExecutionTree(qsym::ExprBuilder *expr_builder, qsym::Solver *solver) :
+    g_expr_builder(expr_builder), g_solver(solver){
     root = new TreeNode();
   }
 
@@ -98,6 +98,8 @@ public:
   // Export all visited leaf nodes with a depth within N
   std::vector<TreeNode *> selectTerminalNodes(uint32_t depth);
 
+  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t depth);
+
   // Export all unvisited leaf nodes
 //  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
 //  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
@@ -105,12 +107,14 @@ public:
 //  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
 //  std::vector<qsym::ExprRef> getRelaConstraints(
 //      const TreeNode *srcNode, std::set<trace> *relaBranchTraces);
-//  std::string generateTestCase(TreeNode *node);
+
+  std::string generateTestCase(TreeNode *node);
 
   void printTree(uint32_t limitDepth, bool isFullPrint = false);
 
 private:
   qsym::ExprBuilder *g_expr_builder;
+  qsym::Solver *g_solver;
 
   TreeNode *root;
 
@@ -121,6 +125,8 @@ private:
   void deserializeToQsymExpr(
       const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr);
   TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
+
+  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
 
   bool isFullyBuilt(const TreeNode* node);
 

@@ -58,7 +58,9 @@ private:
     return res;
   }
 
-  uint32_t findReadIdx(ExprRef e);
+  std::set<uint32_t> findReadIdx(ExprRef e);
+  std::vector<uint8_t> readInput(std::string input_file);
+  std::vector<uint8_t> validInput(ExecutionTree * executionTree, TreeNode *leafNode);
 
   CXXTypeRef getOrInsertTy(ExprRef expr);
   CXXTypeRef getBVTy(uint32_t bits, bool isSign = false);
@@ -77,7 +79,6 @@ private:
   // Visitor and ConstantAssignment helper methods
   std::string getBoolConstantStr(ExprRef e) const;
   std::string getBVConstantStr(ExprRef e) const;
-  std::string getFPConstantStr(ExprRef e) const;
   std::string getFreshSymbol();
   void insertSSAStmt(ExprRef e, llvm::StringRef expr,
                      llvm::StringRef preferredSymbolName);

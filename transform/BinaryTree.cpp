@@ -143,6 +143,7 @@ void ExecutionTree::updatePCTree(
     bool branchTaken = pnode.taken() > 0;
 
     deserializeToQsymExpr(pnode.constraint(), pathCons);
+
 //    std::cerr << "[zgf dbg] idx : " << i << " " << pathCons->toString() << "\n";
     PCTNode pctNode(pathCons, input, branchTaken, 0, pnode.b_id());
 
@@ -294,7 +295,7 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
         node->isDiverse)
       continue;
 
-    if (isFullyBuilt(node)){
+    if (node->status == HasVisited && node->isLeaf()){
       // no expand, kill early
       hasVisited.push_back(node);
       continue;
@@ -307,8 +308,8 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
   return hasVisited;
 }
 
-/*
-std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes(uint32_t N) {
+
+std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t depth) {
   std::vector<TreeNode*> willbeVisited;
   if (!root) return willbeVisited;
 
@@ -319,14 +320,13 @@ std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes(uint32_t N) {
     TreeNode *node = worklist.front();
     worklist.pop();
 
-    if (isFullyBuilt(node))
+    if (isFullyBuilt(node) ||
+        node->isDiverse ||
+        node->depth > depth)
       continue;
 
     if (node->status == WillbeVisit && node != root)
       willbeVisited.push_back(node);
-
-    if (N != 0 && willbeVisited.size() >= N)
-      break;
 
     if (node->left)  worklist.push(node->left);
     if (node->right) worklist.push(node->right);
@@ -335,6 +335,47 @@ std::vector<TreeNode *> ExecutionTree::getWillBeVisitedNodes(uint32_t N) {
   return willbeVisited;
 }
 
+std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode){
+  std::vector<qsym::ExprRef> constraints;
+
+  auto currNode = srcNode;
+  while (currNode != getRoot()) {
+    qsym::ExprRef expr = currNode->data.constraint;
+
+    if (!currNode->data.taken)
+      expr = g_expr_builder->createLNot(expr);
+    constraints.push_back(expr);
+
+    currNode = currNode->parent;
+  }
+  return constraints;
+}
+
+std::string ExecutionTree::generateTestCase(TreeNode *node){
+  fs::path input_file = node->data.input_file;
+  //assert(node->status == WillbeVisit);
+
+  std::vector<qsym::ExprRef> constraints = getConstraints(node);
+
+//  std::cerr << "[" << constraints.size() << ", " << node->depth << "]\n";
+
+  g_solver->reset();
+  g_solver->setInputFile(input_file);
+  for (const auto& cond : constraints)
+    g_solver->add(cond->toZ3Expr());
+
+  std::string new_case = g_solver->fetchTestcase();
+
+  // No Solution, set the node status to UNSAT
+  // SAT, record the testcase,
+  // NOTE ! the HasVisited must set in UPDATETREE
+  if (new_case.empty())
+    node->status = UnReachable;
+
+  return new_case;
+}
+
+/*
 std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
   // re-compute the tobe visited nodes
   std::vector<TreeNode *> allNodes = getWillBeVisitedNodes(N);
@@ -390,46 +431,4 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
 
   return result;
 }
-
-
-std::vector<qsym::ExprRef> ExecutionTree::getConstraints(const TreeNode *srcNode){
-  std::vector<qsym::ExprRef> constraints;
-
-  auto currNode = srcNode;
-  while (currNode != getRoot()) {
-    qsym::ExprRef expr = currNode->data.constraint;
-
-    if (!currNode->data.taken)
-      expr = g_expr_builder->createLNot(expr);
-    constraints.push_back(expr);
-
-    currNode = currNode->parent;
-  }
-  return constraints;
-}
-
-
-std::string ExecutionTree::generateTestCase(TreeNode *node){
-  fs::path input_file = node->data.input_file;
-  assert(node->status == WillbeVisit);
-
-  std::vector<qsym::ExprRef> constraints = getConstraints(node);
-
-//  std::cerr << "[" << constraints.size() << ", " << node->depth << "]\n";
-
-  g_solver->reset();
-  g_solver->setInputFile(input_file);
-
-  for (const auto& cond : constraints)
-    g_solver->add(cond->toZ3Expr());
-
-  std::string new_case = g_solver->fetchTestcase();
-
-  // No Solution, set the node status to UNSAT
-  // SAT, record the testcase,
-  // NOTE ! the HasVisited must set in UPDATETREE
-  if (new_case.empty())
-    node->status = UnReachable;
-
-  return new_case;
-}*/
+*/

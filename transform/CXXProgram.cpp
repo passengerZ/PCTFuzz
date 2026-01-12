@@ -162,7 +162,7 @@ CXXGenericStatement::CXXGenericStatement(CXXDecl* parent,
     : CXXStatement(parent), statement(statement.str()) {}
 
 void CXXGenericStatement::print(llvm::raw_ostream& os) const {
-  os << statement << ";\n";
+  os << statement << "\n";
 }
 
 // CXXProgram

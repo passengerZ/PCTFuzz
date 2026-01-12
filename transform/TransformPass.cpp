@@ -65,6 +65,8 @@ void TransformPass::insertHeaderIncludes() {
       program.get(),"math.h",/*systemHeader=*/true));
   program->appendDecl(std::make_shared<CXXIncludeDecl>(
       program.get(),"stdbool.h",/*systemHeader=*/true));
+  program->appendDecl(std::make_shared<CXXIncludeDecl>(
+      program.get(),"time.h",/*systemHeader=*/true));
 
   program->appendDecl(std::make_shared<CXXGenericStatement>(
       program.get(),
@@ -81,7 +83,7 @@ CXXFunctionDeclRef TransformPass::buildEntryPoint() {
   auto retTy = std::make_shared<CXXType>(
       program.get(), "unsigned char");
   auto firstArgTy = std::make_shared<CXXType>(
-      program.get(), "const uint8_t*");
+      program.get(), "uint8_t*");
   auto secondArgTy = std::make_shared<CXXType>(
       program.get(), "size_t");
   entryPointFirstArgName = insertSymbol("data");
@@ -246,12 +248,12 @@ void TransformPass::insertFuzzingTarget(CXXCodeBlockRef cb) {
   blockForAbort->statements.push_back(
       std::make_shared<CXXCommentBlock>(cb.get(), "Fuzzing target"));
   blockForAbort->statements.push_back(
-      std::make_shared<CXXGenericStatement>(cb.get(), "return 1"));
+      std::make_shared<CXXGenericStatement>(cb.get(), "return 1;"));
 }
 
-uint32_t TransformPass::findReadIdx(ExprRef e){
+std::set<uint32_t> TransformPass::findReadIdx(ExprRef e){
   std::vector<ExprRef> stack;
-  uint32_t max_index = 0;
+  std::set<uint32_t> index;
 
   stack.push_back(e);
 
@@ -261,8 +263,7 @@ uint32_t TransformPass::findReadIdx(ExprRef e){
 
     std::shared_ptr<ReadExpr> re = castAs<ReadExpr>(top);
     if (re != NULL) {
-      if (re->index() > max_index)
-        max_index = re->index();
+      index.insert(re->index());
     } else {
       for (INT32 i = 0; i < top->num_children(); i++) {
         ExprRef k = top->getChild(i);
@@ -270,7 +271,38 @@ uint32_t TransformPass::findReadIdx(ExprRef e){
       }
     }
   }
-  return max_index;
+  return index;
+}
+
+std::vector<uint8_t> TransformPass::readInput(std::string input_file) {
+  std::vector<uint8_t> input;
+  std::ifstream ifs (input_file, std::ifstream::in | std::ifstream::binary);
+  if (ifs.fail()) {
+    LOG_FATAL("Cannot open an input file :" + input_file + "\n");
+    exit(-1);
+  }
+
+  char ch;
+  while (ifs.get(ch))
+    input.push_back((UINT8)ch);
+  return input;
+}
+
+std::vector<uint8_t> TransformPass::validInput(
+    ExecutionTree * executionTree, TreeNode *leafNode) {
+  TreeNode *nagetiveNode = leafNode->parent->left;
+  if (nagetiveNode == leafNode)
+    nagetiveNode = leafNode->parent->right;
+
+  assert(nagetiveNode->status == HasVisited || nagetiveNode->status == WillbeVisit);
+
+  std::vector<uint8_t> emptyInput;
+
+  // get solution from SMT solver
+  std::string nageInput = executionTree->generateTestCase(nagetiveNode);
+  if (nageInput.empty())
+    return emptyInput;
+  return readInput(nageInput);
 }
 
 bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth) {
@@ -286,7 +318,15 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
   auto fuzzFn = buildEntryPoint();
   entryPointMainBlock = fuzzFn->defn;
 
-  uint32_t g_read_idx = 0, curr_read_idx = 0, curr_read_max = 0;
+  auto srandStmt = std::make_shared<CXXGenericStatement>(
+      getCurrentBlock().get(), "srand((uint8_t)time(NULL));");
+  getCurrentBlock()->statements.push_back(srandStmt);
+
+  auto forBeginStmt = std::make_shared<CXXGenericStatement>(
+      getCurrentBlock().get(), "for(int i=0; i<16; i++){");
+  getCurrentBlock()->statements.push_back(forBeginStmt);
+
+  uint32_t g_read_idx = 0, curr_read_max = 0;
 
   // Generate constraint branches
   for (TreeNode *leafNode : terminalNodes){
@@ -294,9 +334,10 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
 
     curr_read_max = 0;
     while (currNode != executionTree->getRoot()) {
-      curr_read_idx = findReadIdx(currNode->data.constraint);
-      if (curr_read_idx > curr_read_max)
-        curr_read_max = curr_read_idx;
+      auto index = findReadIdx(currNode->data.constraint);
+      for (uint32_t id : index)
+        if (id > curr_read_max)
+        curr_read_max = id;
       currNode = currNode->parent;
     }
     if (curr_read_max > g_read_idx){
@@ -309,11 +350,6 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
     std::vector<std::string> conditions;
     while (currNode != executionTree->getRoot()) {
       qsym::ExprRef expr = currNode->data.constraint;
-
-      if (expr->isBool()){
-        currNode = currNode->parent;
-        continue;
-      }
 
       doDFSPostOrderTraversal(expr);
 
@@ -335,12 +371,48 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
 
     auto ifStatement = std::make_shared<CXXIfStatement>(
         getCurrentBlock().get(), exitIfCondition);
-    ifStatement->trueBlock = earlyExitBlock;
+
+    auto trueBlock = std::make_shared<CXXCodeBlock>(program.get());
+
+    // read the input from nagetive path
+    std::vector<uint8_t> inputs = validInput(executionTree, leafNode);
+    if (inputs.empty()){
+      // nagetive path unsat, return 0
+      auto returnStmt = std::make_shared<CXXGenericStatement>(
+          trueBlock.get(), "return 0;");
+      trueBlock->statements.push_back(returnStmt);
+    }else{
+      // build the repaired code block
+      auto relaIdx = findReadIdx(leafNode->data.constraint);
+      for (auto id : relaIdx){
+        std::string repairStr = "data[" + std::to_string(id) + "] = "
+                                + std::to_string(inputs[id]) +
+                                " + i * (uint8_t)rand();";
+        auto repairStmt  = std::make_shared<CXXGenericStatement>(
+            trueBlock.get(), repairStr);
+        trueBlock->statements.push_back(repairStmt);
+      }
+
+      auto continueStmt = std::make_shared<CXXGenericStatement>(
+          trueBlock.get(), "continue;");
+      trueBlock->statements.push_back(continueStmt);
+    }
+
+
+    // build the enter 'if statement'
+    ifStatement->trueBlock = trueBlock;
     ifStatement->falseBlock = nullptr;
     getCurrentBlock()->statements.push_back(ifStatement);
   }
 
   insertFuzzingTarget(fuzzFn->defn);
+
+  auto forEndStmt = std::make_shared<CXXGenericStatement>(
+      getCurrentBlock().get(), "}");
+  auto returnStmt = std::make_shared<CXXGenericStatement>(
+      getCurrentBlock().get(), "return 0;");
+  getCurrentBlock()->statements.push_back(forEndStmt);
+  getCurrentBlock()->statements.push_back(returnStmt);
 
 //  program->print(llvm::errs());
 //  llvm::errs() << "========\n";

@@ -334,7 +334,7 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
   if (g_config.useSolver)
     g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 
-  if (branchConstaints.size() > 300)
+  if (constraint->isBool() || branchConstaints.size() > 300)
     return;
 
   // if the constraint is same as prev, do not collect

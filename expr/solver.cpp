@@ -160,7 +160,7 @@ std::string Solver::fetchTestcase() {
 
   std::vector<UINT8> values = getConcreteValues();
 
-  fname = out_dir_+ "/pct_" + toString6digit(num_generated_);
+  fname = out_dir_+ "/id:" + toString6digit(num_generated_);
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");
@@ -314,7 +314,7 @@ void Solver::checkOutDir() {
 void Solver::readInput() {
   std::ifstream ifs (input_file_, std::ifstream::in | std::ifstream::binary);
   if (ifs.fail()) {
-    LOG_FATAL("Cannot open an input file\n");
+    LOG_FATAL("Cannot open an input file :" + input_file_ + "\n");
     exit(-1);
   }
 
