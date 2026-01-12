@@ -70,5 +70,5 @@ message SequenceNode {
 
 message ConstraintSequence {
   repeated SequenceNode node = 1;
-  uint32 varBytes  = 2;
+  repeated uint32 visBB  = 2;
 }

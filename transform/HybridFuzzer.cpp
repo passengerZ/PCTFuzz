@@ -49,7 +49,9 @@ Solver *g_solver;
 CallStackManager g_call_stack_manager;
 z3::context *g_z3_context;
 
+SearchStrategy *g_searcher;
 ExecutionTree *executionTree;
+
 
 std::set<uint32_t> lastExitNodes;
 
@@ -72,15 +74,15 @@ bool build_pct_evaluator(State *state){
   bool isNewEvaluator = false;
 
   // step (4) : dump the visited leaf node to build failed pass
-  std::vector<TreeNode *> terminalNodes =
-      executionTree->selectTerminalNodes(curr_depth);
+  std::vector<TreeNode *> deadNodes =
+      executionTree->selectDeadNode(curr_depth);
   std::set<uint32_t> currTerminalIDs;
-  for (auto node : terminalNodes)
+  for (auto node : deadNodes)
     currTerminalIDs.insert(node->id);
 
   bool hasChanged = currTerminalIDs != lastExitNodes;
   std::cerr << "[PCT] Evaluator Changed: " << hasChanged
-            << ", Terminal Size: " << terminalNodes.size()
+            << ", DeadNode Size: " << deadNodes.size()
             << ", Depth: " << curr_depth << "\n";
 
   if (!hasChanged){
@@ -88,7 +90,7 @@ bool build_pct_evaluator(State *state){
   }
 
   PCT::TransformPass TP;
-  if(TP.buildEvaluator(executionTree, curr_depth)){
+  if(TP.buildEvaluator(executionTree, &deadNodes, curr_depth)){
     // update the changed exit nodes
     lastExitNodes.clear();
     lastExitNodes.insert(currTerminalIDs.begin(), currTerminalIDs.end());
@@ -140,7 +142,9 @@ int main(int argc, char* argv[]) {
   qsym::g_expr_builder = qsym::SymbolicExprBuilder::create();
   qsym::g_z3_context = new z3::context{};
   qsym::g_solver = new qsym::Solver("/dev/null", state.solved.path, "");
-  executionTree = new ExecutionTree(g_expr_builder, g_solver);
+  g_searcher = new SearchStrategy();
+  executionTree = new ExecutionTree(g_expr_builder, g_solver, g_searcher);
+
 
   auto last_evaluator_time = std::chrono::steady_clock::now();
   uint32_t EvaluatorTimeLimitSec = 30;
@@ -181,14 +185,13 @@ int main(int argc, char* argv[]) {
 
       if (build_pct_evaluator(&state)){
         last_evaluator_time = now;
-
         if (EvaluatorTimeLimitSec < 600)
           EvaluatorTimeLimitSec += 60;
 
         std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
       }
 
-      curr_depth += 5;
+      curr_depth += 2;
     }
 
     if (duration_cast<seconds>(now - state.last_stats_output) > STATS_INTERVAL_SEC) {

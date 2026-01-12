@@ -305,12 +305,12 @@ std::vector<uint8_t> TransformPass::validInput(
   return readInput(nageInput);
 }
 
-bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth) {
+bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
+                                   std::vector<TreeNode *> *deadNodes,
+                                   unsigned depth) {
   program = std::make_shared<CXXProgram>();
 
-  std::vector<TreeNode *> terminalNodes =
-      executionTree->selectTerminalNodes(depth);
-  if (terminalNodes.size() < 2)
+  if (deadNodes->size() < 2)
     return false;
 
   insertHeaderIncludes();
@@ -322,14 +322,17 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
       getCurrentBlock().get(), "srand((uint8_t)time(NULL));");
   getCurrentBlock()->statements.push_back(srandStmt);
 
+  std::string forStr = "for(int i=0; i<" +
+                       std::to_string(deadNodes->size())
+                       + "; i++){";
   auto forBeginStmt = std::make_shared<CXXGenericStatement>(
-      getCurrentBlock().get(), "for(int i=0; i<16; i++){");
+      getCurrentBlock().get(), forStr);
   getCurrentBlock()->statements.push_back(forBeginStmt);
 
   uint32_t g_read_idx = 0, curr_read_max = 0;
 
   // Generate constraint branches
-  for (TreeNode *leafNode : terminalNodes){
+  for (TreeNode *leafNode : *deadNodes){
     auto currNode = leafNode;
 
     curr_read_max = 0;
@@ -387,7 +390,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree, unsigned depth)
       for (auto id : relaIdx){
         std::string repairStr = "data[" + std::to_string(id) + "] = "
                                 + std::to_string(inputs[id]) +
-                                " + i * (uint8_t)rand();";
+                                " + (i % 2) * (uint8_t)rand();";
         auto repairStmt  = std::make_shared<CXXGenericStatement>(
             trueBlock.get(), repairStr);
         trueBlock->statements.push_back(repairStmt);

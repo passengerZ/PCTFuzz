@@ -133,6 +133,9 @@ void ExecutionTree::updatePCTree(
   pct::ConstraintSequence cs;
   cs.ParseFromIstream(&inputf);
 
+  for (int i = 0; i < cs.visbb_size(); i++)
+    g_searcher->updateVisBB(cs.visbb(i));
+
   qsym::ExprRef pathCons;
   TreeNode *currNode = getRoot();
   for (int i = 0; i < cs.node_size(); i++) {
@@ -145,7 +148,7 @@ void ExecutionTree::updatePCTree(
     deserializeToQsymExpr(pnode.constraint(), pathCons);
 
 //    std::cerr << "[zgf dbg] idx : " << i << " " << pathCons->toString() << "\n";
-    PCTNode pctNode(pathCons, input, branchTaken, 0, pnode.b_id());
+    PCTNode pctNode(pathCons, input, branchTaken, pnode.b_id());
 
     currNode = updateTree(currNode, pctNode);
     if (currNode == getRoot())
@@ -163,7 +166,7 @@ bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
       return false;
     return true; // is terminal PC
   }
-  else if (!node->left || !node->right) {
+  else if (!node->left || !node->right || node->isDiverse) {
     return false;
   }
   bool isFull = isFullyBuilt(node->left) && isFullyBuilt((node->right));
@@ -281,8 +284,8 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
 }
 
 std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
-  std::vector<TreeNode*> hasVisited;
-  if (!root) return hasVisited;
+  std::vector<TreeNode*> terminal;
+  if (!root) return terminal;
 
   std::queue<TreeNode*> worklist;
   worklist.push(root);
@@ -297,7 +300,7 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
 
     if (node->status == HasVisited && node->isLeaf()){
       // no expand, kill early
-      hasVisited.push_back(node);
+      terminal.push_back(node);
       continue;
     }
 
@@ -305,7 +308,44 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
     if (node->right) worklist.push(node->right);
   }
 
-  return hasVisited;
+  return terminal;
+}
+
+std::vector<TreeNode *> ExecutionTree::selectDeadNode(uint32_t depth) {
+  std::vector<TreeNode*> deadNode;
+  if (!root) return deadNode;
+
+  std::set<uint32_t> deadBB = g_searcher->computeDeadBB();
+  if (deadBB.empty()) return deadNode;
+
+  std::queue<TreeNode*> worklist;
+  worklist.push(root);
+
+  while (!worklist.empty()) {
+    TreeNode* node = worklist.front();
+    worklist.pop();
+
+    if (node->depth > depth ||
+        node->isDiverse)
+      continue;
+
+    if (isFullyBuilt(node)){
+      deadNode.push_back(node);
+      continue;
+    }
+
+    if (deadBB.find(node->data.currBB) != deadBB.end() &&
+        node != root){
+      // no expand, kill early
+      deadNode.push_back(node);
+      continue;
+    }
+
+    if (node->left)  worklist.push(node->left);
+    if (node->right) worklist.push(node->right);
+  }
+
+  return deadNode;
 }
 
 

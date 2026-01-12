@@ -60,15 +60,15 @@ struct PCTreeNode {
   PCTreeNode() : constraint(nullptr), taken(false) {}
 
   PCTreeNode(qsym::ExprRef expr, fs::path input_file,
-             bool taken, uint32_t varBytes, uint32_t currBB)
+             bool taken, uint32_t currBB)
       : constraint(std::move(expr)), input_file(std::move(input_file)),
-        taken(taken), varBytes(varBytes),currBB(currBB){}
+        taken(taken), currBB(currBB) {}
+
   qsym::ExprRef constraint;
   fs::path input_file;
   bool taken  = false;
 
-  uint32_t varBytes = 0;
-  // Record basic block successor
+  // Record basic block
   uint32_t currBB = -1;
 };
 
@@ -77,8 +77,10 @@ typedef Node<PCTNode> TreeNode;
 
 class ExecutionTree {
 public:
-  ExecutionTree(qsym::ExprBuilder *expr_builder, qsym::Solver *solver) :
-    g_expr_builder(expr_builder), g_solver(solver){
+  ExecutionTree(qsym::ExprBuilder *expr_builder,
+                qsym::Solver *solver,
+                SearchStrategy *searcher) :
+    g_expr_builder(expr_builder), g_solver(solver), g_searcher(searcher){
     root = new TreeNode();
   }
 
@@ -100,6 +102,8 @@ public:
 
   std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t depth);
 
+  std::vector<TreeNode *> selectDeadNode(uint32_t depth);
+
   // Export all unvisited leaf nodes
 //  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
 //  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
@@ -115,6 +119,7 @@ public:
 private:
   qsym::ExprBuilder *g_expr_builder;
   qsym::Solver *g_solver;
+  SearchStrategy *g_searcher;
 
   TreeNode *root;
 

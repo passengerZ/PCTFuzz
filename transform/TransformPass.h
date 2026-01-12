@@ -16,7 +16,9 @@ class TransformPass : public ExprASTVisitor {
 public:
   TransformPass();
 
-  bool buildEvaluator(ExecutionTree *executionTree, unsigned depth);
+  bool buildEvaluator(ExecutionTree *executionTree,
+                      std::vector<TreeNode *> *deadNodes,
+                      unsigned depth);
   void dumpEvaluator(const std::string &path);
 
   std::shared_ptr<CXXProgram> program;

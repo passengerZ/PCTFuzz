@@ -155,6 +155,7 @@ EnhancedQsymSolver *g_enhanced_solver;
 
 std::vector<BranchNode> branchConstaints;
 std::map<UINT32, pct::SymbolicExpr> cached;
+std::set<UINT32> visBB;
 bool isReported = false;
 uint32_t currBBID;
 int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
@@ -440,6 +441,7 @@ void _sym_notify_ret(uintptr_t site_id) {
 void _sym_notify_basic_block(uintptr_t site_id) {
   g_call_stack_manager.visitBasicBlock(site_id);
   currBBID = site_id;
+  visBB.insert(site_id);
 }
 
 //
@@ -649,6 +651,10 @@ void _sym_report_path_constraint_sequence() {
 
   pct::ConstraintSequence cs;
 
+  for(uint32_t bb : visBB) {
+    cs.add_visbb(bb);
+  }
+
   for(const auto &e : branchConstaints) {
     if (e.constraint) {
       SymExpr constraint = e.constraint;
@@ -661,11 +667,11 @@ void _sym_report_path_constraint_sequence() {
       *expr = serializeQsymExpr(constraint);
     }
   }
-  cs.set_varbytes(MaxVarIndex);
+//  cs.set_varbytes(MaxVarIndex);
 
   std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);
-  //LOG_INFO("New path constraint tree: " + fname + "\n");
+  LOG_INFO("New path constraint tree: " + fname + "\n");
   if (of.fail())
     LOG_FATAL("Unable to open a file to write results\n");
 
