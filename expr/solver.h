@@ -38,6 +38,7 @@ public:
   z3::check_result check();
 
   void setInputFile(const std::string &input_file);
+  std::vector<UINT8> fetchValues();
   std::string fetchTestcase();
 
   bool checkAndSave(const std::string& postfix="");

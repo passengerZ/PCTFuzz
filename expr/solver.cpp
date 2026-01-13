@@ -176,6 +176,15 @@ std::string Solver::fetchTestcase() {
   return fname;
 }
 
+std::vector<UINT8> Solver::fetchValues() {
+  std::vector<UINT8> res;
+  if (check() != z3::sat) {
+    LOG_DEBUG("unsat\n");
+    return res;
+  }
+  return getConcreteValues();
+}
+
 bool Solver::checkAndSave(const std::string& postfix) {
   if (check() == z3::sat) {
     saveValues(postfix);

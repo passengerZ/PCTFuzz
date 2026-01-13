@@ -20,6 +20,9 @@
 #include "qsymExpr.pb.h"
 
 namespace fs = std::filesystem;
+
+#define MAX_FSIZE 64*64
+
 typedef std::pair<uint32_t, uint32_t> trace;
 
 enum NodeStatus {
@@ -93,8 +96,10 @@ public:
 
   void updatePCTree(const fs::path &constraint_file, const fs::path &input);
 
-  static TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
-    return new Node<PCTNode>(parent, std::move(n));
+  TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
+    TreeNode *newNode = new Node<PCTNode>(parent, std::move(n));
+    tobeVisited.push_back(newNode);
+    return newNode;
   }
 
   // Export all visited leaf nodes with a depth within N
@@ -113,6 +118,9 @@ public:
 //      const TreeNode *srcNode, std::set<trace> *relaBranchTraces);
 
   std::string generateTestCase(TreeNode *node);
+  std::vector<UINT8> generateValues(TreeNode *node);
+  std::vector<std::vector<uint8_t>> sampleValues(
+      TreeNode *node, const std::set<uint32_t>& index, uint32_t N);
 
   void printTree(uint32_t limitDepth, bool isFullPrint = false);
 
@@ -122,18 +130,20 @@ private:
   SearchStrategy *g_searcher;
 
   TreeNode *root;
+  std::vector<TreeNode *> tobeVisited;
 
   std::map<UINT32, qsym::ExprRef> protoCached;
 
   std::set<const TreeNode*> fullCache;
 
   void deserializeToQsymExpr(
-      const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr);
+      const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t &max_read);
   TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
 
   std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
 
   bool isFullyBuilt(const TreeNode* node);
+  bool isFullyVisited(const TreeNode* node, uint32_t depth);
 
   void printNodeWithIndent(const TreeNode* node, uint32_t depth);
   void printTree(const TreeNode* node, uint32_t depth,

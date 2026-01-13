@@ -17,8 +17,7 @@ public:
   TransformPass();
 
   bool buildEvaluator(ExecutionTree *executionTree,
-                      std::vector<TreeNode *> *deadNodes,
-                      unsigned depth);
+                      std::vector<TreeNode *> *deadNodes);
   void dumpEvaluator(const std::string &path);
 
   std::shared_ptr<CXXProgram> program;
@@ -63,6 +62,7 @@ private:
   std::set<uint32_t> findReadIdx(ExprRef e);
   std::vector<uint8_t> readInput(std::string input_file);
   std::vector<uint8_t> validInput(ExecutionTree * executionTree, TreeNode *leafNode);
+
 
   CXXTypeRef getOrInsertTy(ExprRef expr);
   CXXTypeRef getBVTy(uint32_t bits, bool isSign = false);

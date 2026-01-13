@@ -18,7 +18,7 @@ template <typename E> constexpr auto to_underlying(E e) noexcept {
 /////////////////////
 
 void ExecutionTree::deserializeToQsymExpr(
-    const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr) {
+    const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t &max_read) {
   UINT32 hashValue = protoExpr.hash();
   auto it = protoCached.find(hashValue);
   if (it != protoCached.end()) {
@@ -45,36 +45,38 @@ void ExecutionTree::deserializeToQsymExpr(
     // translate.
     uint32_t idx = protoExpr.value();
     qsymExpr = g_expr_builder->createRead(idx);
+    if (idx > max_read)
+      max_read = idx;
     break;
   }
   case pct::ExprKind::Extract: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
     qsymExpr = g_expr_builder->createExtract(
         child0, protoExpr.value() & 0xFFFFFFFF, protoExpr.bits());
     break;
   }
   case pct::ExprKind::ZExt: {
     uint32_t bits = protoExpr.bits();
-    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
     qsymExpr = g_expr_builder->createZExt(child0, bits);
     break;
   }
   case pct::ExprKind::SExt: {
     uint32_t bits = protoExpr.bits();
-    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
     qsymExpr = g_expr_builder->createSExt(child0, bits);
     break;
   }
   case pct::ExprKind::Neg: case pct::ExprKind::Not:
   case pct::ExprKind::LNot: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
     qsymExpr = g_expr_builder->createUnaryExpr(
         static_cast<qsym::Kind>(to_underlying(exprKind)), child0);
     break;
   }
   case pct::ExprKind::Concat:{
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    deserializeToQsymExpr(protoExpr.children(1), child1);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
+    deserializeToQsymExpr(protoExpr.children(1), child1, max_read);
     qsymExpr = g_expr_builder->createConcat(child0, child1);
     break;
   }
@@ -92,16 +94,16 @@ void ExecutionTree::deserializeToQsymExpr(
   case pct::ExprKind::Slt: case pct::ExprKind::Sle:
   case pct::ExprKind::Sgt: case pct::ExprKind::Sge:
   case pct::ExprKind::LOr: case pct::ExprKind::LAnd: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    deserializeToQsymExpr(protoExpr.children(1), child1);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
+    deserializeToQsymExpr(protoExpr.children(1), child1, max_read);
     qsymExpr = g_expr_builder->createBinaryExpr(
         static_cast<qsym::Kind>(to_underlying(exprKind)), child0, child1);
     break;
   }
   case pct::ExprKind::Ite: {
-    deserializeToQsymExpr(protoExpr.children(0), child0);
-    deserializeToQsymExpr(protoExpr.children(1), child1);
-    deserializeToQsymExpr(protoExpr.children(2), child2);
+    deserializeToQsymExpr(protoExpr.children(0), child0, max_read);
+    deserializeToQsymExpr(protoExpr.children(1), child1, max_read);
+    deserializeToQsymExpr(protoExpr.children(2), child2, max_read);
     qsymExpr = g_expr_builder->createIte(child0, child1, child2);
     break;
   }
@@ -123,6 +125,12 @@ void ExecutionTree::deserializeToQsymExpr(
 
 void ExecutionTree::updatePCTree(
     const fs::path &constraint_file, const fs::path &input) {
+
+  // resize the input into limit MAX_FSIZE
+  auto current_size = std::filesystem::file_size(input);
+  if (current_size > MAX_FSIZE)
+    std::filesystem::resize_file(input, MAX_FSIZE);
+
   ifstream inputf(constraint_file, std::ofstream::in | std::ofstream::binary);
   if (inputf.fail()){
     std::cerr << "Unable to open a file ["
@@ -133,8 +141,11 @@ void ExecutionTree::updatePCTree(
   pct::ConstraintSequence cs;
   cs.ParseFromIstream(&inputf);
 
-  for (int i = 0; i < cs.visbb_size(); i++)
+  uint32_t bbSize = cs.visbb_size();
+  for (uint32_t i = 0; i < bbSize; i++)
     g_searcher->updateVisBB(cs.visbb(i));
+
+  uint32_t max_read = 0;
 
   qsym::ExprRef pathCons;
   TreeNode *currNode = getRoot();
@@ -145,14 +156,15 @@ void ExecutionTree::updatePCTree(
 
     bool branchTaken = pnode.taken() > 0;
 
-    deserializeToQsymExpr(pnode.constraint(), pathCons);
+    deserializeToQsymExpr(pnode.constraint(), pathCons, max_read);
 
-//    std::cerr << "[zgf dbg] idx : " << i << " " << pathCons->toString() << "\n";
-    PCTNode pctNode(pathCons, input, branchTaken, pnode.b_id());
-
-    currNode = updateTree(currNode, pctNode);
-    if (currNode == getRoot())
+    if (max_read > MAX_FSIZE){
+      currNode->isDiverse = true;
       break;
+    }
+
+    PCTNode pctNode(pathCons, input, branchTaken, pnode.b_id());
+    currNode = updateTree(currNode, pctNode);
   }
 
 }
@@ -169,9 +181,25 @@ bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
   else if (!node->left || !node->right || node->isDiverse) {
     return false;
   }
-  bool isFull = isFullyBuilt(node->left) && isFullyBuilt((node->right));
+  bool isFull = isFullyBuilt(node->left) && isFullyBuilt(node->right);
   if (isFull)
     fullCache.insert(node);
+  return isFull;
+}
+
+bool ExecutionTree::isFullyVisited(const TreeNode* node, uint32_t depth) {
+  if (node->depth > depth)
+    return false;
+  if (node->isLeaf()) {
+    if (node->status == WillbeVisit)
+      return false;
+    return true; // is terminal PC
+  }
+  else if (!node->left || !node->right) {
+    return false;
+  }
+  bool isFull = isFullyVisited(node->left, depth) &&
+                isFullyVisited(node->right,depth);
   return isFull;
 }
 
@@ -235,12 +263,10 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
     if (currNode->left) {
       if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
         // if path is divergent, try to rebuild it !
-        currNode->isDiverse = true;
-        currNode->left = constructTreeNode(currNode, pctNode);
 
-//        std::cerr << "[PCT] left Divergent : "
-//                  << currNode->depth << " " << currNode->data.currBB << "\n";
         fullCache.clear();
+        currNode->left = constructTreeNode(currNode, pctNode);
+        currNode->left->isDiverse = true;
       }
 
       currNode->left->data.taken = true;
@@ -258,12 +284,10 @@ TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
     if (currNode->right) {
       if (currNode->right->data.constraint->hash() != pctNode.constraint->hash()) {
         // if path is divergent, try to rebuild it !
-        currNode->isDiverse = true;
-        currNode->right = constructTreeNode(currNode, pctNode);
 
-//        std::cerr << "[PCT] right Divergent : "
-//                  << currNode->depth << " " << currNode->data.currBB << "\n";
         fullCache.clear();
+        currNode->right = constructTreeNode(currNode, pctNode);
+        currNode->right->isDiverse = true;
       }
 
       currNode->right->data.taken = false;
@@ -360,13 +384,14 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t depth) 
     TreeNode *node = worklist.front();
     worklist.pop();
 
-    if (isFullyBuilt(node) ||
-        node->isDiverse ||
-        node->depth > depth)
+    if (isFullyVisited(node, depth) || node->depth > depth){
       continue;
+    }
 
-    if (node->status == WillbeVisit && node != root)
+    if (node->status == WillbeVisit && node != root){
       willbeVisited.push_back(node);
+      continue;
+    }
 
     if (node->left)  worklist.push(node->left);
     if (node->right) worklist.push(node->right);
@@ -413,6 +438,67 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
     node->status = UnReachable;
 
   return new_case;
+}
+
+std::vector<UINT8> ExecutionTree::generateValues(TreeNode *node){
+  fs::path input_file = node->data.input_file;
+  std::vector<qsym::ExprRef> constraints = getConstraints(node);
+
+  g_solver->reset();
+  g_solver->setInputFile(input_file);
+  for (const auto& cond : constraints)
+    g_solver->add(cond->toZ3Expr());
+
+  std::vector<UINT8> new_case = g_solver->fetchValues();
+
+  // No Solution, set the node status to UNSAT
+  // SAT, record the testcase,
+  // NOTE ! the HasVisited must set in UPDATETREE
+  if (new_case.empty())
+    node->status = UnReachable;
+
+  return new_case;
+}
+
+std::vector<std::vector<uint8_t>> ExecutionTree::sampleValues(
+    TreeNode *node, const std::set<uint32_t>& index, uint32_t N){
+  fs::path input_file = node->data.input_file;
+  std::vector<qsym::ExprRef> constraints = getConstraints(node);
+
+  std::vector<std::vector<uint8_t>> sampleIndexValues;
+
+  // push basic constraints
+  g_solver->reset();
+  g_solver->setInputFile(input_file);
+  for (const auto& cond : constraints)
+    g_solver->add(cond->toZ3Expr());
+
+  std::vector<UINT8> new_case = g_solver->fetchValues();
+  uint32_t sampleCnt = 0;
+  while(!new_case.empty()){
+    std::vector<uint8_t> currSample;
+    qsym::ExprRef sampleCons;
+    for (uint32_t id : index){
+      currSample.push_back(new_case[id]);
+      qsym::ExprRef value = g_expr_builder->createConstant(new_case[id], 8);
+      qsym::ExprRef readExpr = g_expr_builder->createRead(id);
+      qsym::ExprRef oneEqual = g_expr_builder->createEqual(value, readExpr);
+      if (sampleCons)
+        sampleCons = g_expr_builder->createAnd(sampleCons, oneEqual);
+      else
+        sampleCons = oneEqual;
+    }
+
+    sampleIndexValues.push_back(currSample);
+    g_solver->add(g_expr_builder->createLNot(sampleCons)->toZ3Expr());
+    new_case = g_solver->fetchValues();
+
+    sampleCnt ++;
+    if (sampleCnt > N)
+      break;
+  }
+
+  return sampleIndexValues;
 }
 
 /*

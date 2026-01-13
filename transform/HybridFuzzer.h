@@ -208,7 +208,6 @@ public:
   bool use_standard_input;
   bool use_qemu_mode;
   fs::path queue;
-  std::set<std::string> visTestcaseID;
 
   static AflConfig load(const fs::path& fuzzer_output) {
     fs::path stats_file = fuzzer_output / "fuzzer_stats";
@@ -259,7 +258,6 @@ public:
     bool use_stdin = std::find(target_cmd.begin(), target_cmd.end(), "@@") == target_cmd.end();
     bool qemu_mode = std::find(tokens.begin(), tokens.end(), "-Q") != tokens.end();
 
-    std::set<std::string> visTestcaseID;
 
     return AflConfig{
         afl_binary_dir / "afl-showmap",
@@ -267,7 +265,6 @@ public:
         use_stdin,
         qemu_mode,
         fuzzer_output / "queue",
-        visTestcaseID
     };
   }
 
@@ -299,9 +296,7 @@ public:
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(queue)) {
       if (entry.is_regular_file() && seen.find(entry.path()) == seen.end()) {
-        std::string entryID = get_origin_id(entry.path());
-        if (visTestcaseID.find(entryID) == visTestcaseID.end())
-          candidates.push_back(entry.path());
+        candidates.push_back(entry.path());
       }
     }
 
