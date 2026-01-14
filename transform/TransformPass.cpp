@@ -377,48 +377,47 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
 
     auto trueBlock = std::make_shared<CXXCodeBlock>(program.get());
 
-    // read the input from nagetive path
-//    std::vector<uint8_t> inputs = validInput(executionTree, leafNode);
-//    if (inputs.empty()){
-//      // nagetive path unsat, return 0
-//      auto returnStmt = std::make_shared<CXXGenericStatement>(
-//          trueBlock.get(), "return 0;");
-//      trueBlock->statements.push_back(returnStmt);
-//    }else{
-//      // build the repaired code block
-//      auto index = findReadIdx(leafNode->data.constraint);
-//      for (auto id : index){
-//        std::string repairStr = "data[" + std::to_string(id) + "] = "
-//                                + std::to_string(inputs[id]) + ";";
-//        auto repairStmt  = std::make_shared<CXXGenericStatement>(
-//            trueBlock.get(), repairStr);
-//        trueBlock->statements.push_back(repairStmt);
-//      }
-//
-//      auto continueStmt = std::make_shared<CXXGenericStatement>(
-//          trueBlock.get(), "continue;");
-//      trueBlock->statements.push_back(continueStmt);
-//    }
+    uint32_t SAMPLE_MAX = 16;
 
     auto index = findReadIdx(leafNode->data.constraint);
-
     TreeNode *nagetiveNode = leafNode->parent->left;
     if (nagetiveNode == leafNode)
       nagetiveNode = leafNode->parent->right;
+
     std::vector<std::vector<uint8_t>> sampledInputs =
-        executionTree->sampleValues(nagetiveNode, index, 10);
+        executionTree->sampleValues(nagetiveNode, index, SAMPLE_MAX);
 
     if (sampledInputs.empty()) {
       // nagetive path unsat, return 0
       auto returnStmt = std::make_shared<CXXGenericStatement>(
           trueBlock.get(), "return 0;");
       trueBlock->statements.push_back(returnStmt);
+
+    } else if (sampledInputs.size() == SAMPLE_MAX && index.size() == 1){
+      // may have one variable easy constraints, use random to set value
+
+      // data[4] = rand();
+      // continue;
+
+      for (auto id : index){
+        std::string repairStr = "data[" + std::to_string(id) + "] = rand();";
+        auto repairStmt  = std::make_shared<CXXGenericStatement>(
+            trueBlock.get(), repairStr);
+        trueBlock->statements.push_back(repairStmt);
+      }
+
+      auto continueStmt = std::make_shared<CXXGenericStatement>(
+          trueBlock.get(), "continue;");
+      trueBlock->statements.push_back(continueStmt);
+
     } else {
+      // may have strict constraints (maybe relational)
 
       // static const uint8_t vals[][2] = {{16, 17}, {31, 32}, {47, 48}, {111, 222}};
       // int idx = rand() % 4;
       // data[4] = vals[idx][0];
       // data[5] = vals[idx][1];
+      // continue;
 
       std::string sampleStr  = std::to_string(sampledInputs.size());
       std::string varSizeStr = std::to_string(index.size());
@@ -466,7 +465,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
   auto forEndStmt = std::make_shared<CXXGenericStatement>(
       getCurrentBlock().get(), "}");
   auto returnStmt = std::make_shared<CXXGenericStatement>(
-      getCurrentBlock().get(), "return rand() % 2;");
+      getCurrentBlock().get(), "return 0;");
   getCurrentBlock()->statements.push_back(forEndStmt);
   getCurrentBlock()->statements.push_back(returnStmt);
 

@@ -433,9 +433,10 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
 
   // No Solution, set the node status to UNSAT
   // SAT, record the testcase,
-  // NOTE ! the HasVisited must set in UPDATETREE
   if (new_case.empty())
     node->status = UnReachable;
+  else
+    node->status = HasVisited;
 
   return new_case;
 }
@@ -494,67 +495,73 @@ std::vector<std::vector<uint8_t>> ExecutionTree::sampleValues(
     new_case = g_solver->fetchValues();
 
     sampleCnt ++;
-    if (sampleCnt > N)
+    if (sampleCnt >= N)
       break;
   }
 
   return sampleIndexValues;
 }
 
-/*
-std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N){
-  // re-compute the tobe visited nodes
-  std::vector<TreeNode *> allNodes = getWillBeVisitedNodes(N);
-  size_t total = allNodes.size();
-  if (total < N)
-    return allNodes;
+void ExecutionTree::updateTobeVisited(){
+  for (auto &it : tobeVisited){
+    std::vector<uint32_t> selectedIdx;
 
-  // Step 1: 按 depth 分组，同一 depth 内保持原始顺序（或可排序）
-  std::map<uint32_t, std::vector<TreeNode*>> depthGroups;
-  for (auto node : allNodes) {
-    depthGroups[node->depth].push_back(node);
+    for (uint32_t idx = 0; idx < it.second.size(); idx++){
+      if (it.second[idx]->status != WillbeVisit){
+        selectedIdx.push_back(idx);
+      }
+    }
+
+    for (auto rit = selectedIdx.rbegin(); rit != selectedIdx.rend(); ++rit) {
+      it.second.erase(it.second.begin() + *rit);
+    }
   }
+}
 
-  // 可选：对每个 depth 组内部按 id 排序，确保确定性
-  for (auto& pair : depthGroups) {
-    std::sort(pair.second.begin(), pair.second.end(),
-              [](TreeNode* a, TreeNode* b) {
-                return a->id < b->id; // 或其他稳定排序依据
-              });
+std::vector<TreeNode *> ExecutionTree::selectNodesFromDepth(
+    uint32_t evaluator_depth){
+  std::vector<TreeNode *> selectedNodes;
+
+  for (uint32_t dep = 0; dep < evaluator_depth; dep++){
+    for (uint32_t idx = 0; idx < tobeVisited[dep].size(); idx++){
+      TreeNode *node = tobeVisited[dep][idx];
+      if (!node->isDiverse && node->status == WillbeVisit){
+        selectedNodes.push_back(node);
+      }
+    }
   }
+  return selectedNodes;
+}
 
-  // Step 2: round-robin 采样
-  std::vector<TreeNode*> result;
-  result.reserve(N);
+std::vector<TreeNode *> ExecutionTree::selectNodesFromGroup(uint32_t N){
+  std::vector<TreeNode *> selectedNodes;
 
   // 记录每个 depth 下一次要取的索引（初始为 0）
   std::map<uint32_t, size_t> nextIndex;
-  for (const auto& pair : depthGroups) {
+  for (const auto& pair : tobeVisited) {
     nextIndex[pair.first] = 0;
   }
 
   // 持续采样直到取满 N 个
-  while (result.size() < N) {
+  while (selectedNodes.size() < N) {
     bool madeProgress = false;
     // 遍历所有 depth（按升序：浅→深；若想优先深，可用 rbegin/rend）
-    for (const auto& pair : depthGroups) {
+    for (const auto& pair : tobeVisited) {
       uint32_t depth = pair.first;
       const auto& nodes = pair.second;
       size_t& idx = nextIndex[depth];
 
       if (idx < nodes.size()) {
-        result.push_back(nodes[idx]);
+        selectedNodes.push_back(nodes[idx]);
         idx++;
         madeProgress = true;
 
-        if (result.size() >= N) break;
+        if (selectedNodes.size() >= N) break;
       }
     }
 
     // 如果一轮下来一个都没取到，说明已无更多节点
     if (!madeProgress) break;
   }
-
-  return result;
+  return selectedNodes;
 }
-*/

@@ -41,7 +41,8 @@ cl::opt<std::string> SymCCTargetBin(
 
 constexpr seconds STATS_INTERVAL_SEC{60};
 
-uint32_t MAX_DEPTH = 80, curr_depth = 10;
+uint32_t MAX_DEPTH = 50, BATCH_SIZE = 32;
+uint32_t evaluator_depth = 10;
 
 namespace qsym {
 ExprBuilder *g_expr_builder;
@@ -62,8 +63,9 @@ void solved_pct(std::vector<TreeNode *> *tobeExplores,
 
   for (auto node : *tobeExplores){
     std::string testcase = executionTree->generateTestCase(node);
-    if (testcase.empty())
+    if (testcase.empty()){
       continue;
+    }
 
     state->run_symcc_input(testcase, *symcc, *afl_config, executionTree);
     state->solved.current_id++;
@@ -75,7 +77,7 @@ bool build_pct_evaluator(State *state){
 
   // step (4) : dump the visited leaf node to build failed pass
   std::vector<TreeNode *> deadNodes =
-      executionTree->selectDeadNode(curr_depth);
+      executionTree->selectDeadNode(evaluator_depth);
   std::set<uint32_t> currTerminalIDs;
   for (auto node : deadNodes)
     currTerminalIDs.insert(node->id);
@@ -83,7 +85,7 @@ bool build_pct_evaluator(State *state){
   bool hasChanged = currTerminalIDs != lastExitNodes;
   std::cerr << "[PCT] Evaluator Changed: " << hasChanged
             << ", DeadNode Size: " << deadNodes.size()
-            << ", Depth: " << curr_depth << "\n";
+            << ", Depth: " << evaluator_depth << "\n";
 
   if (!hasChanged){
     return isNewEvaluator;
@@ -171,22 +173,36 @@ int main(int argc, char* argv[]) {
     for (auto ce_seed : unvis_seeds)
       state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
 
+    bool evalutorStatus = false;
     std::vector<TreeNode *> willbeVisit =
-        executionTree->selectWillBeVisitedNodes(curr_depth);
+        executionTree->selectNodesFromDepth(evaluator_depth);
+    if (willbeVisit.empty())
+      evalutorStatus = true;
+
+    if (willbeVisit.size() < BATCH_SIZE){
+      std::vector<TreeNode *> extendVisit =
+          executionTree->selectNodesFromGroup(BATCH_SIZE - willbeVisit.size());
+      willbeVisit.insert(willbeVisit.end(), extendVisit.begin(), extendVisit.end());
+    }
+
     solved_pct(&willbeVisit, &state, &symcc, &afl_config);
+
+    executionTree->updateTobeVisited();
 
     bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
         now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
-    if (evaluator_limit && curr_depth < MAX_DEPTH){
+    if (evaluator_limit && evaluator_depth < MAX_DEPTH && evalutorStatus){
 
       last_evaluator_time = now;
+      evaluator_depth += 2;
       if (build_pct_evaluator(&state)){
         if (EvaluatorTimeLimitSec < 120)
           EvaluatorTimeLimitSec += 10;
 
         std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
       }else{
-        curr_depth += 2;
+        if (EvaluatorTimeLimitSec > 30)
+          EvaluatorTimeLimitSec -= 10;
       }
     }
 

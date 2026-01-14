@@ -52,6 +52,7 @@ public:
   Node(Node<T> *parent, T data) :
       parent(parent), left(NULL), right(NULL), data(data) {
     depth = parent->depth + 1;
+    isDiverse = parent->isDiverse;
     id = g_id;
     g_id ++;
   }
@@ -98,7 +99,7 @@ public:
 
   TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
     TreeNode *newNode = new Node<PCTNode>(parent, std::move(n));
-    tobeVisited.push_back(newNode);
+    tobeVisited[newNode->depth].push_back(newNode);
     return newNode;
   }
 
@@ -108,6 +109,12 @@ public:
   std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t depth);
 
   std::vector<TreeNode *> selectDeadNode(uint32_t depth);
+
+  void updateTobeVisited();
+  std::vector<TreeNode *> selectNodesFromDepth(
+      uint32_t evaluator_depth);
+  std::vector<TreeNode *> selectNodesFromGroup(
+      uint32_t N);
 
   // Export all unvisited leaf nodes
 //  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
@@ -130,7 +137,7 @@ private:
   SearchStrategy *g_searcher;
 
   TreeNode *root;
-  std::vector<TreeNode *> tobeVisited;
+  std::map<uint32_t, std::vector<TreeNode *>> tobeVisited;
 
   std::map<UINT32, qsym::ExprRef> protoCached;
 
