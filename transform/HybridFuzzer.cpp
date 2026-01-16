@@ -41,7 +41,7 @@ cl::opt<std::string> SymCCTargetBin(
 
 constexpr seconds STATS_INTERVAL_SEC{60};
 
-uint32_t MAX_DEPTH = 50, BATCH_SIZE = 64;
+uint32_t MAX_DEPTH = 50, BATCH_SIZE = 16;
 uint32_t evaluator_depth = 10;
 
 namespace qsym {
@@ -56,20 +56,25 @@ ExecutionTree *executionTree;
 
 std::set<uint32_t> lastExitNodes;
 
-void solved_pct(std::vector<TreeNode *> *tobeExplores,
-                State *state, SymCC *symcc, AflConfig* afl_config){
+uint32_t solved_pct(std::vector<TreeNode *> *tobeExplores,
+                    State *state, SymCC *symcc, AflConfig* afl_config){
   if (tobeExplores->empty())
-    return ;
+    return 0;
 
+  int covNewCnt = 0;
   for (auto node : *tobeExplores){
     std::string testcase = executionTree->generateTestCase(node);
-    if (testcase.empty()){
+    if (testcase.empty())
       continue;
-    }
 
-    state->run_symcc_input(testcase, *symcc, *afl_config, executionTree);
-    state->solved.current_id++;
+    bool isCovNew = state->run_pct_input(
+        testcase, *symcc, *afl_config, executionTree);
+    if (isCovNew){
+      state->solved.current_id++;
+      covNewCnt ++;
+    }
   }
+  return covNewCnt;
 }
 
 bool build_pct_evaluator(State *state){
@@ -147,31 +152,45 @@ int main(int argc, char* argv[]) {
   g_searcher = new SearchStrategy();
   executionTree = new ExecutionTree(g_expr_builder, g_solver, g_searcher);
 
-  auto last_evaluator_time = std::chrono::steady_clock::now();
-  uint32_t EvaluatorTimeLimitSec = 10;
+//  auto last_evaluator_time = std::chrono::steady_clock::now();
+//  uint32_t EvaluatorTimeLimitSec = 10;
 
+  int cnt = 0;
   while (true) {
-    auto new_testcase = afl_config.best_new_testcase(state.processed_files);
+    cnt ++;
+    std::cerr << "[PCT] Loops : " << cnt << "\n";
+    auto new_testcase = afl_config.best_new_testcase(
+        state.processed_files);
     if (new_testcase.has_value()) {
-      // clean sync dir to collect DSE dumped testcases
-      fs::path local_afl_seed = symcc.copy_testcase(
-          *new_testcase, state.sync, new_testcase.value());
+      auto fsize = fs::file_size(new_testcase.value());
+      std::cerr << "[PCT] Sync AFL++ best : " << new_testcase.value().string()
+                << ", file size : " << fsize << "\n";
+
+//      fs::path local_afl_seed = symcc.copy_testcase(
+//          *new_testcase, state.sync, new_testcase.value());
 
       state.processed_files.insert(new_testcase.value());
-      state.run_afl_input(local_afl_seed, symcc, afl_config, executionTree);
-    }else{
+      state.run_afl_input(
+          new_testcase.value(), symcc, afl_config, executionTree);
+    }
+    else{
       std::this_thread::sleep_for(seconds(3));
     }
 
     // compute the evaluator
     auto now = std::chrono::steady_clock::now();
 
+    /*
     // make sure in curr_depth, there are no willbeVisited nodes
+    std::cerr << "[PCT] Start to replay Symcc testcases ...\n";
     std::vector<fs::path> unvis_seeds =
         afl_config.get_unvis_seeds(state.queue.path, state.concoliced_files);
 
     for (auto ce_seed : unvis_seeds)
       state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
+
+    std::cerr << "[PCT] Replaied Symcc testcases : " << unvis_seeds.size() << "\n";
+
 
     bool evalutorStatus = false;
 
@@ -188,7 +207,11 @@ int main(int argc, char* argv[]) {
 
     solved_pct(&willbeVisit, &state, &symcc, &afl_config);
 
+    std::cerr << "[PCT] Solved PCT tree nodes : " << willbeVisit.size() << "\n";
+
     executionTree->updateTobeVisited();
+
+    //executionTree->printTree(20, true);
 
     bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
         now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
@@ -206,6 +229,13 @@ int main(int argc, char* argv[]) {
       last_evaluator_time = now;
       evaluator_depth += 2;
     }
+
+    std::vector<TreeNode *> willbeVisit =
+        executionTree->selectWillBeVisitedNodes(BATCH_SIZE);
+    uint32_t covnew = solved_pct(&willbeVisit, &state, &symcc, &afl_config);
+
+    std::cerr << "[PCT] Solved PCT tree nodes : " << willbeVisit.size()
+              << ", CovNew : " << covnew << "\n";*/
 
     if (duration_cast<seconds>(now - state.last_stats_output) > STATS_INTERVAL_SEC) {
       if (!state.stats.log(state.stats_file)) {

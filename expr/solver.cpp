@@ -120,8 +120,11 @@ void Solver::pop() {
 }
 
 void Solver::add(z3::expr expr) {
-  if (!expr.is_const())
+  if (!expr.is_const()){
+    if (!expr.is_bool())
+      expr = expr.bit2bool(0);
     solver_.add(expr.simplify());
+  }
 }
 
 z3::check_result Solver::check() {

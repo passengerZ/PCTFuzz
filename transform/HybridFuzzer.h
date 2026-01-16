@@ -119,7 +119,7 @@ public:
 struct TestcaseScore {
   bool new_coverage;
   bool derived_from_seed;
-  int64_t neg_file_size; // negative file size → smaller file = higher score
+  int64_t neg_file_size; // negative file size -> smaller file = higher score
   std::string base_name;
 
   bool operator<(const TestcaseScore& other) const {
@@ -295,7 +295,8 @@ public:
   std::optional<fs::path> best_new_testcase(const std::set<fs::path>& seen) {
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(queue)) {
-      if (entry.is_regular_file() && seen.find(entry.path()) == seen.end()) {
+      if (entry.is_regular_file() &&
+          seen.find(entry.path()) == seen.end()) {
         candidates.push_back(entry.path());
       }
     }
@@ -697,7 +698,7 @@ public:
         .solved     = TestcaseDir{output_dir / "solved"},
         .stats      = {},
         .stats_file = std::ofstream{output_dir / "stats"},
-        .evaluator_file    = output_dir / "pct-evaluator.c"
+        .evaluator_file = output_dir / "pct-evaluator.c"
     };
   }
 
@@ -705,8 +706,6 @@ public:
                      const SymCC& symcc,
                      const AflConfig& afl_config,
                      ExecutionTree *executionTree) {
-//    std::cerr << "Running on input " << input << "\n";
-
     fs::path tmp_dir;
     {
       const char* tmpdir_env = std::getenv("TMPDIR");
@@ -730,9 +729,13 @@ public:
     };
 
     uint64_t num_total = 0, num_interesting = 0;
+
+    process_new_testcase(input, input, tmp_dir, afl_config);
     SymCCResult symccRes = symcc.run(
         input, tmp_dir / "output", true);
     executionTree->updatePCTree(symccRes.constraint_file, input);
+
+    std::cerr << "[PCT] SymCC executed testcases\n";
 
     for (const auto& new_test : symccRes.test_cases) {
       auto res = process_new_testcase(new_test, input, tmp_dir, afl_config);
@@ -743,7 +746,7 @@ public:
       }
     }
 
-//    std::cerr << "Generated " << num_total << " test cases (" << num_interesting << " new)\n";
+    std::cerr << "[PCT] Generated " << num_total << " test cases (" << num_interesting << " new)\n";
 
     if (symccRes.killed) {
       std::cerr << "The target process was killed (probably timeout or OOM); archiving to "
@@ -754,7 +757,7 @@ public:
     processed_files.insert(input);
     stats.add_execution(symccRes);
     cleanup();
-    return true;
+    return num_interesting > 0;
   }
 
   bool run_symcc_input(const fs::path& input,
@@ -783,16 +786,60 @@ public:
       fs::remove_all(tmp_dir, ec);
     };
 
+    // current input from symcc.queue must be covernew in last
     SymCCResult symccRes = symcc.run(
         input, tmp_dir / "output", false);
     executionTree->updatePCTree(symccRes.constraint_file, input);
-
-    process_new_testcase(input, input, tmp_dir, afl_config);
+    stats.add_execution(symccRes);
 
     concoliced_files.insert(input);
-    stats.add_execution(symccRes);
     cleanup();
     return true;
+  }
+
+  bool run_pct_input(const fs::path& input,
+                     const SymCC& symcc,
+                     const AflConfig& afl_config,
+                     ExecutionTree *executionTree) {
+    bool isCovNew = false;
+    fs::path tmp_dir;
+    {
+      const char* tmpdir_env = std::getenv("TMPDIR");
+      std::string tmp_base = tmpdir_env ? tmpdir_env : "/tmp";
+      std::string pattern = fs::path(tmp_base) / "symcc-XXXXXX";
+
+      std::vector<char> buffer(pattern.begin(), pattern.end());
+      buffer.push_back('\0');
+
+      char* result = mkdtemp(buffer.data());
+      if (!result) {
+        std::cerr << "Failed to create unique temp directory: " << strerror(errno) << "\n";
+        return false;
+      }
+      tmp_dir = fs::path(result);
+    }
+
+    auto cleanup = [&tmp_dir]() {
+      std::error_code ec;
+      fs::remove_all(tmp_dir, ec);
+    };
+
+    // current input from pct-solver may be covernew
+    auto res = process_new_testcase(input, input, tmp_dir, afl_config);
+    if (res == TestcaseResult::Uninteresting){
+      // delete useless output
+      std::error_code ec;
+      fs::remove(input, ec);
+    }else{
+      SymCCResult symccRes = symcc.run(
+          input, tmp_dir / "output", false);
+      executionTree->updatePCTree(symccRes.constraint_file, input);
+      stats.add_execution(symccRes);
+      isCovNew = true;
+    }
+
+    cleanup();
+    return isCovNew;
   }
 
 private:

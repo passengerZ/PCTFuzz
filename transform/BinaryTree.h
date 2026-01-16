@@ -103,7 +103,7 @@ public:
   // Export all visited leaf nodes with a depth within N
   std::vector<TreeNode *> selectTerminalNodes(uint32_t depth);
 
-  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t depth);
+  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
 
   std::vector<TreeNode *> selectDeadNode(uint32_t depth);
 

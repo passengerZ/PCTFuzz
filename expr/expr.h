@@ -467,10 +467,10 @@ public:
     }
 };
 
-class BoolExpr : public NonConstantExpr {
+class BoolExpr : public ConstantExpr {
 public:
   BoolExpr(bool value) :
-    NonConstantExpr(Bool, 1),
+    ConstantExpr(value, 1),
     value_(value) {}
 
   inline bool value() const { return value_; }
@@ -1198,7 +1198,11 @@ protected:
   }
 
   z3::expr toZ3ExprRecursively(bool verbose) override {
-    return z3::ite(children_[0]->toZ3Expr(verbose),
+    z3::expr cond = children_[0]->toZ3Expr(verbose);
+    if (!cond.is_bool())
+      cond = cond.bit2bool(0);
+
+    return z3::ite(cond,
         children_[1]->toZ3Expr(verbose),
         children_[2]->toZ3Expr(verbose));
   }

@@ -202,6 +202,7 @@ bool ExecutionTree::isFullyVisited(const TreeNode* node, uint32_t depth) {
   if (!isFull) return isFull;
 
   for (auto right : node->rights) isFull &= isFullyVisited(right, depth);
+
   return isFull;
 }
 
@@ -224,7 +225,7 @@ void ExecutionTree::printNodeWithIndent(const TreeNode* node, uint32_t depth) {
   std::string status  = node->status == UnReachable ? "[un sat]" :
                         node->status == WillbeVisit ? "[will vis]" :
                         node->status == HasVisited  ? "[has vis]" :
-                         "[diverse]";
+                         "[has solved]";
 
   std::string constraintStr = node->data.constraint->toString();
   std::cerr << indent << index
@@ -341,8 +342,7 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
     TreeNode* node = worklist.front();
     worklist.pop();
 
-    if (node->depth > depth ||
-        node->isDiverse())
+    if (node->depth > depth)
       continue;
 
     if (node->status == HasVisited && node->isLeaf()){
@@ -382,6 +382,10 @@ std::set<uint32_t> ExecutionTree::findReadIdx(qsym::ExprRef e){
 }
 
 bool ExecutionTree::isDeadNodeStrict(TreeNode *node){
+  // check current node must be sat
+  if (node->status == UnReachable || node->status == WillbeVisit)
+    return false;
+
   std::set<uint32_t> relativeIndex;
 
   auto currNode = node;
@@ -412,8 +416,7 @@ std::vector<TreeNode *> ExecutionTree::selectDeadNode(uint32_t depth) {
     TreeNode* node = worklist.front();
     worklist.pop();
 
-    if (node->depth > depth ||
-        node->isDiverse())
+    if (node->depth > depth)
       continue;
 
     if (isFullyBuilt(node) && isDeadNodeStrict(node)){
@@ -436,7 +439,7 @@ std::vector<TreeNode *> ExecutionTree::selectDeadNode(uint32_t depth) {
 }
 
 
-std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t depth) {
+std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t N) {
   std::vector<TreeNode*> willbeVisited;
   if (!root) return willbeVisited;
 
@@ -447,12 +450,11 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t depth) 
     TreeNode *node = worklist.front();
     worklist.pop();
 
-    if (isFullyVisited(node, depth) || node->depth > depth){
-      continue;
-    }
-
     if (node->status == WillbeVisit && node != root){
       willbeVisited.push_back(node);
+      if (willbeVisited.size() >= N)
+        return willbeVisited;
+
       continue;
     }
 
@@ -498,7 +500,7 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
   // SAT, record the testcase,
   if (new_case.empty())
     node->status = UnReachable;
-  else
+  else if (node->status == WillbeVisit)
     node->status = HasSolved;
 
   return new_case;
@@ -520,7 +522,7 @@ std::vector<UINT8> ExecutionTree::generateValues(TreeNode *node){
   // NOTE ! the HasVisited must set in UPDATETREE
   if (new_case.empty())
     node->status = UnReachable;
-  else
+  else if (node->status == WillbeVisit)
     node->status = HasSolved;
 
   return new_case;
@@ -592,7 +594,7 @@ std::vector<TreeNode *> ExecutionTree::selectNodesFromDepth(
   for (uint32_t dep = 0; dep < evaluator_depth; dep++){
     for (uint32_t idx = 0; idx < tobeVisited[dep].size(); idx++){
       TreeNode *node = tobeVisited[dep][idx];
-      if (!node->isDiverse() && node->status == WillbeVisit){
+      if (node->status == WillbeVisit){
         selectedNodes.push_back(node);
       }
     }

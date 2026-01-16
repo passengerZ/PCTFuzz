@@ -154,11 +154,12 @@ public:
 EnhancedQsymSolver *g_enhanced_solver;
 
 std::vector<BranchNode> branchConstaints;
+std::set<UINT32> visSiteID;
 std::map<UINT32, pct::SymbolicExpr> cached;
 std::set<UINT32> visBB;
 bool isReported = false;
 uint32_t currBBID;
-int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV}; // signal handling
+int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV, SIGTERM}; // signal handling
 } // namespace
 
 using namespace qsym;
@@ -329,23 +330,22 @@ SymExpr _sym_build_trunc(SymExpr expr, uint8_t bits) {
 
 void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id) {
-  if (constraint == nullptr)
+  if (constraint == nullptr || constraint->isBool())
     return;
 
   if (g_config.useSolver)
     g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
-
-  if (constraint->isBool() || branchConstaints.size() > 300)
+/*
+  if (branchConstaints.size() > 300)
     return;
 
   // if the constraint is same as prev, do not collect
-  if (!branchConstaints.empty() &&
+  if ( ! branchConstaints.empty() &&
       constraint->hash() == branchConstaints.back().constraint->hash() &&
       taken == branchConstaints.back().taken)
     return;
 
-  BranchNode bNode(constraint, taken, currBBID);
-  branchConstaints.push_back(bNode);
+  branchConstaints.emplace_back(constraint, taken, currBBID);*/
 }
 
 SymExpr _sym_get_input_byte(size_t offset, uint8_t value) {
@@ -655,18 +655,15 @@ void _sym_report_path_constraint_sequence() {
     cs.add_visbb(bb);
   }
 
-  for(const auto &e : branchConstaints) {
-    if (e.constraint) {
-      SymExpr constraint = e.constraint;
+  for(const auto &bnode : branchConstaints) {
+    pct::SequenceNode *node = cs.add_node();
+    node->set_taken((bnode.taken > 0));
+    node->set_b_id(bnode.currBB);
 
-      pct::SequenceNode *node = cs.add_node();
-      node->set_taken((e.taken > 0));
-      node->set_b_id(e.currBB);
-
-      pct::SymbolicExpr *expr = node->mutable_constraint();
-      *expr = serializeQsymExpr(constraint);
-    }
+    pct::SymbolicExpr *expr = node->mutable_constraint();
+    *expr = serializeQsymExpr(bnode.constraint);
   }
+
 //  cs.set_varbytes(MaxVarIndex);
 
   std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";
