@@ -28,7 +28,8 @@ typedef std::pair<uint32_t, uint32_t> trace;
 enum NodeStatus {
   UnReachable = 0,
   WillbeVisit = 1,
-  HasVisited  = 2
+  HasVisited  = 2,
+  HasSolved   = 3
 };
 
 static uint32_t g_id = 1;
@@ -36,37 +37,35 @@ template<typename T>
 class Node {
 public:
 
-  Node<T> *parent, *left, *right;
+  Node<T> *parent;
+  std::vector<Node<T> *> lefts, rights;
   T data;
 
   NodeStatus status = WillbeVisit;
-  bool isDiverse = false;
   uint32_t id = 0, depth = 0;
 
-  Node() : parent(NULL), left(NULL), right(NULL) {
+  Node() : parent(NULL){
     parent = NULL;
-    left = NULL;
-    right = NULL;
   }
 
   Node(Node<T> *parent, T data) :
-      parent(parent), left(NULL), right(NULL), data(data) {
+      parent(parent), data(data) {
     depth = parent->depth + 1;
-    isDiverse = parent->isDiverse;
     id = g_id;
     g_id ++;
   }
 
-  bool isLeaf() const { return !left && !right; }
+  bool isLeaf() const { return lefts.empty() && rights.empty(); }
+  bool isDiverse() const { return lefts.size() > 1 || rights.size() > 1; }
 };
 
 struct PCTreeNode {
   PCTreeNode() : constraint(nullptr), taken(false) {}
 
   PCTreeNode(qsym::ExprRef expr, fs::path input_file,
-             bool taken, uint32_t currBB)
+             bool taken, uint32_t currBB, uint32_t maxRead)
       : constraint(std::move(expr)), input_file(std::move(input_file)),
-        taken(taken), currBB(currBB) {}
+        taken(taken), currBB(currBB), maxRead(maxRead) {}
 
   qsym::ExprRef constraint;
   fs::path input_file;
@@ -74,6 +73,7 @@ struct PCTreeNode {
 
   // Record basic block
   uint32_t currBB = -1;
+  uint32_t maxRead = 0;
 };
 
 typedef struct PCTreeNode PCTNode;
@@ -90,10 +90,7 @@ public:
 
   ~ExecutionTree() { delete root; }
   TreeNode *getRoot() const { return root; }
-
-//  int getLeftNodeSize() {
-//    return static_cast<int>(getWillBeVisitedNodes(0).size());
-//  }
+  SearchStrategy *getSearcher() const {return g_searcher;}
 
   void updatePCTree(const fs::path &constraint_file, const fs::path &input);
 
@@ -115,14 +112,10 @@ public:
       uint32_t evaluator_depth);
   std::vector<TreeNode *> selectNodesFromGroup(
       uint32_t N);
+  std::vector<TreeNode *> selectNodesFromDist(
+      uint32_t N);
+  TreeNode *selectBestVisitedNode(std::set<uint32_t> selectedID, uint32_t maxRead);
 
-  // Export all unvisited leaf nodes
-//  std::vector<TreeNode *> getWillBeVisitedNodes(uint32_t N);
-//  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
-//
-//  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
-//  std::vector<qsym::ExprRef> getRelaConstraints(
-//      const TreeNode *srcNode, std::set<trace> *relaBranchTraces);
 
   std::string generateTestCase(TreeNode *node);
   std::vector<UINT8> generateValues(TreeNode *node);
@@ -138,16 +131,16 @@ private:
 
   TreeNode *root;
   std::map<uint32_t, std::vector<TreeNode *>> tobeVisited;
-
   std::map<UINT32, qsym::ExprRef> protoCached;
 
-  std::set<const TreeNode*> fullCache;
-
   void deserializeToQsymExpr(
-      const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t &max_read);
+      const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t *max_read);
   TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
 
   std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
+
+  std::set<uint32_t> findReadIdx(qsym::ExprRef e);
+  bool isDeadNodeStrict(TreeNode *node);
 
   bool isFullyBuilt(const TreeNode* node);
   bool isFullyVisited(const TreeNode* node, uint32_t depth);

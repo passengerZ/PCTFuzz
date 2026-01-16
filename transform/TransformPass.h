@@ -60,7 +60,7 @@ private:
   }
 
   std::set<uint32_t> findReadIdx(ExprRef e);
-  std::vector<uint8_t> readInput(std::string input_file);
+  std::vector<uint8_t> readInput(std::string input_file, uint32_t N);
   std::vector<uint8_t> validInput(ExecutionTree * executionTree, TreeNode *leafNode);
 
 

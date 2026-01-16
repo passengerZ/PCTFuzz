@@ -34,6 +34,12 @@ public:
   std::set<trace> Trace;
   std::map<uint32_t, std::set<uint32_t>>  ICFG,  revICFG;
 
+  bool isUpdateDeadBB = true;
+  std::set<uint32_t> deadBB;
+
+  bool isUpdateDist = true;
+  std::map<uint32_t, uint32_t> dist;
+
   void loadJSON(){
     const char *CFGPath = getenv("PCT_CFG_PATH");
     std::cerr << "[PCT] fetch CFG in PCT_CFG_PATH : " << CFGPath << "\n";
@@ -159,12 +165,63 @@ public:
     if (BBID.find(newBB) == BBID.end())
       return false;
     auto isCoverNew = visBB.insert(newBB);
+    if (isCoverNew.second){
+      isUpdateDeadBB = true;
+      isUpdateDist   = true;
+    }
 
     return isCoverNew.second;
   }
 
-  std::set<uint32_t> computeDeadBB() {
-    std::set<uint32_t> deadBB;
+  std::map<uint32_t, uint32_t> *computeDistToUncovered() {
+    if (!isUpdateDist)
+      return &dist;
+    dist.clear();
+
+    // Step 1: 计算未覆盖块
+    std::set<uint32_t> uncovered;
+    std::set_difference(BBID.begin(), BBID.end(),
+                        visBB.begin(), visBB.end(),
+                        std::inserter(uncovered, uncovered.begin()));
+
+    if (uncovered.empty())
+      return &dist; // 空 map
+
+    // Step 2: 反向 BFS，记录最短跳转次数
+    std::queue<uint32_t> q;
+
+    // 初始化：所有 uncovered 块距离为 0
+    for (uint32_t bb : uncovered) {
+      dist[bb] = 0;
+      q.push(bb);
+    }
+
+    // BFS
+    while (!q.empty()) {
+      uint32_t current = q.front();
+      q.pop();
+
+      // 遍历 current 在反向图 revICFG 中的前驱（即原图中能跳到 current 的节点）
+      auto it = revICFG.find(current);
+      if (it != revICFG.end()) {
+        for (uint32_t pred : it->second) {
+          // 如果前驱尚未访问（即不在 dist 中）
+          if (dist.find(pred) == dist.end()) {
+            dist[pred] = dist[current] + 1;
+            q.push(pred);
+          }
+        }
+      }
+    }
+
+    return &dist;
+  }
+
+  std::set<uint32_t> *computeDeadBB() {
+    if (!isUpdateDeadBB)
+      return &deadBB;
+
+    deadBB.clear();
 
     // Step 1: 计算未覆盖块
     std::set<uint32_t> uncovered;
@@ -174,7 +231,7 @@ public:
 
     // 如果没有未覆盖块，则所有已覆盖块都无法到达“未覆盖块”（因为不存在）
     if (uncovered.empty()) {
-      return deadBB;
+      return &deadBB;
     }
 
     // Step 2: 反向 BFS —— 从所有 uncovered 块出发，在 revICFG 上遍历
@@ -212,7 +269,8 @@ public:
       }
     }
 
-    return deadBB;
+    isUpdateDeadBB = false;
+    return &deadBB;
   }
 
 private:

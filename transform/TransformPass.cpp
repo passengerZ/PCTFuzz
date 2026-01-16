@@ -274,7 +274,7 @@ std::set<uint32_t> TransformPass::findReadIdx(ExprRef e){
   return index;
 }
 
-std::vector<uint8_t> TransformPass::readInput(std::string input_file) {
+std::vector<uint8_t> TransformPass::readInput(std::string input_file, uint32_t N) {
   std::vector<uint8_t> input;
   std::ifstream ifs (input_file, std::ifstream::in | std::ifstream::binary);
   if (ifs.fail()) {
@@ -283,16 +283,21 @@ std::vector<uint8_t> TransformPass::readInput(std::string input_file) {
   }
 
   char ch;
-  while (ifs.get(ch))
+  uint32_t cnt = 0;
+  while (ifs.get(ch)){
     input.push_back((UINT8)ch);
+    cnt ++;
+    if (N != 0 && cnt >= N) break;
+  }
+
   return input;
 }
 
 std::vector<uint8_t> TransformPass::validInput(
     ExecutionTree * executionTree, TreeNode *leafNode) {
-  TreeNode *nagetiveNode = leafNode->parent->left;
+  TreeNode *nagetiveNode = leafNode->parent->lefts[0];
   if (nagetiveNode == leafNode)
-    nagetiveNode = leafNode->parent->right;
+    nagetiveNode = leafNode->parent->rights[0];
 
   assert(nagetiveNode->status != UnReachable);
 
@@ -330,9 +335,13 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
 
   // Generate constraint branches
   uint32_t leafIndex = 1;
+  uint32_t SAMPLE_MAX = 16;
+  std::set<uint32_t> selectedBestID;
   for (TreeNode *leafNode : *deadNodes){
+
     auto currNode = leafNode;
 
+    // build the byte size guard
     curr_read_max = 0;
     std::set<uint32_t> relativeIndex;
     while (currNode != executionTree->getRoot()) {
@@ -343,6 +352,14 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       relativeIndex.insert(index.begin(), index.end());
       currNode = currNode->parent;
     }
+
+    // check nagetive node can be reached ?
+    std::vector<std::vector<uint8_t>> sampledInputs =
+        executionTree->sampleValues(leafNode, relativeIndex, SAMPLE_MAX);
+
+    // soft constriants, don't need to check
+    if (sampledInputs.size() == SAMPLE_MAX) continue;
+
     if (curr_read_max > g_read_idx){
       g_read_idx = curr_read_max;
       insertBufferSizeGuard(getCurrentBlock(), g_read_idx + 1);
@@ -366,6 +383,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
 
     if (conditions.empty()) continue;
 
+    // build the condition statement
     std::string exitIfCondition;
     unsigned idx = conditions.size() - 1;
     for (; idx > 0; idx --)
@@ -374,33 +392,45 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
 
     auto ifStatement = std::make_shared<CXXIfStatement>(
         getCurrentBlock().get(), exitIfCondition);
-
     auto trueBlock = std::make_shared<CXXCodeBlock>(program.get());
 
-    uint32_t SAMPLE_MAX = 16;
+    /*
+    // select fixed best node
+    TreeNode *bestNode =
+        executionTree->selectBestVisitedNode(selectedBestID, curr_read_max);
+    selectedBestID.insert(bestNode->id);
 
-    auto index = findReadIdx(leafNode->data.constraint);
-    TreeNode *nagetiveNode = leafNode->parent->left;
-    if (nagetiveNode == leafNode)
-      nagetiveNode = leafNode->parent->right;
+    // build the repaired code block
+    auto deadInput = readInput(leafNode->data.input_file, curr_read_max);
+    auto bestInput = readInput(bestNode->data.input_file, curr_read_max);
+    for (uint32_t readID = 0; readID <= curr_read_max; readID++){
+//      if (deadInput[readID] == bestInput[readID])
+//        continue;
 
-    std::vector<std::vector<uint8_t>> sampledInputs =
-        executionTree->sampleValues(nagetiveNode, index, SAMPLE_MAX);
+      std::string repairStr = "data[" + std::to_string(readID) + "] = "
+                              + std::to_string(bestInput[readID]) + ";";
+      auto repairStmt = std::make_shared<CXXGenericStatement>(
+          trueBlock.get(), repairStr);
+      trueBlock->statements.push_back(repairStmt);
+    }
 
+    auto continueStmt = std::make_shared<CXXGenericStatement>(
+        trueBlock.get(), "continue;");
+    trueBlock->statements.push_back(continueStmt);
+    */
+
+    // build the fix code
     if (sampledInputs.empty()) {
       // nagetive path unsat, return 0
       auto returnStmt = std::make_shared<CXXGenericStatement>(
           trueBlock.get(), "return 0;");
       trueBlock->statements.push_back(returnStmt);
 
-    } else if (sampledInputs.size() == SAMPLE_MAX && index.size() == 1){
-      // may have one variable easy constraints, use random to set value
+    } else if (sampledInputs.size() == 1) {
 
-      // data[4] = rand();
-      // continue;
-
-      for (auto id : index){
-        std::string repairStr = "data[" + std::to_string(id) + "] = rand();";
+      for (auto id : relativeIndex){
+        std::string repairStr = "data[" + std::to_string(id) + "] = "
+                                + std::to_string(sampledInputs[0][id]) + ";";
         auto repairStmt  = std::make_shared<CXXGenericStatement>(
             trueBlock.get(), repairStr);
         trueBlock->statements.push_back(repairStmt);
@@ -410,7 +440,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
           trueBlock.get(), "continue;");
       trueBlock->statements.push_back(continueStmt);
 
-    } else {
+    }else {
       // may have strict constraints (maybe relational)
 
       // static const uint8_t vals[][2] = {{16, 17}, {31, 32}, {47, 48}, {111, 222}};
@@ -420,7 +450,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       // continue;
 
       std::string sampleStr  = std::to_string(sampledInputs.size());
-      std::string varSizeStr = std::to_string(index.size());
+      std::string varSizeStr = std::to_string(relativeIndex.size());
       std::string arrDefine = "static const uint8_t vals["
         + sampleStr + "]["  + varSizeStr + "] = {";
       for (const auto& inputs : sampledInputs)
@@ -437,7 +467,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       trueBlock->statements.push_back(randStmt);
 
       uint32_t cnt = 0;
-      for (auto id : index){
+      for (auto id : relativeIndex){
         std::string repairStr = "data[" + std::to_string(id) + "] = vals[idx]["
                                 + std::to_string(cnt) + "];";
         auto repairStmt  = std::make_shared<CXXGenericStatement>(
@@ -450,7 +480,6 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
           trueBlock.get(), "continue;");
       trueBlock->statements.push_back(continueStmt);
     }
-
 
     // build the enter 'if statement'
     ifStatement->trueBlock = trueBlock;

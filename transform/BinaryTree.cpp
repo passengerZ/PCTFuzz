@@ -5,8 +5,8 @@ template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node
 template<typename T> std::ostream &operator<<(std::ostream &output, Node<T> node) {
     output << "Value: " << node.data;
     if (node.parent) output << " Parent: " << node.parent -> data;
-    if (node.left) output << " Left: " << node.left -> data;
-    if (node.right) output << " Right: " << node.right -> data;
+    if (!node.lefts.empty()) output << " Left: " << node.lefts.size();
+    if (!node.rights.empty()) output << " Right: " << node.rights.size();
     output << "\n";
     return output;
 }
@@ -18,7 +18,7 @@ template <typename E> constexpr auto to_underlying(E e) noexcept {
 /////////////////////
 
 void ExecutionTree::deserializeToQsymExpr(
-    const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t &max_read) {
+    const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t *max_read) {
   UINT32 hashValue = protoExpr.hash();
   auto it = protoCached.find(hashValue);
   if (it != protoCached.end()) {
@@ -45,8 +45,8 @@ void ExecutionTree::deserializeToQsymExpr(
     // translate.
     uint32_t idx = protoExpr.value();
     qsymExpr = g_expr_builder->createRead(idx);
-    if (idx > max_read)
-      max_read = idx;
+    if (idx > *max_read)
+      *max_read = idx;
     break;
   }
   case pct::ExprKind::Extract: {
@@ -156,34 +156,32 @@ void ExecutionTree::updatePCTree(
 
     bool branchTaken = pnode.taken() > 0;
 
-    deserializeToQsymExpr(pnode.constraint(), pathCons, max_read);
+    deserializeToQsymExpr(pnode.constraint(), pathCons, &max_read);
 
-    if (max_read > MAX_FSIZE){
-      currNode->isDiverse = true;
+    if (max_read > MAX_FSIZE)
       break;
-    }
 
-    PCTNode pctNode(pathCons, input, branchTaken, pnode.b_id());
+    PCTNode pctNode(pathCons, input, branchTaken, pnode.b_id(), max_read);
     currNode = updateTree(currNode, pctNode);
   }
-
 }
 
 bool ExecutionTree::isFullyBuilt(const TreeNode* node) {
-  if (fullCache.find(node) != fullCache.end()) {
-    return true;
-  }
-  else if (node->isLeaf()) {
+  if (node->isLeaf()) {
     if (node->status == WillbeVisit)
       return false;
     return true; // is terminal PC
   }
-  else if (!node->left || !node->right || node->isDiverse) {
+  else if (node->lefts.empty() || node->rights.empty() ||
+      node->isDiverse()) {
     return false;
   }
-  bool isFull = isFullyBuilt(node->left) && isFullyBuilt(node->right);
-  if (isFull)
-    fullCache.insert(node);
+  bool isFull = true;
+
+  for (auto left : node->lefts) isFull &= isFullyBuilt(left);
+  if (!isFull) return isFull;
+
+  for (auto right : node->rights) isFull &= isFullyBuilt(right);
   return isFull;
 }
 
@@ -195,11 +193,15 @@ bool ExecutionTree::isFullyVisited(const TreeNode* node, uint32_t depth) {
       return false;
     return true; // is terminal PC
   }
-  else if (!node->left || !node->right) {
+  else if (node->lefts.empty() || node->rights.empty()) {
     return false;
   }
-  bool isFull = isFullyVisited(node->left, depth) &&
-                isFullyVisited(node->right,depth);
+  bool isFull = true;
+
+  for (auto left : node->lefts) isFull &= isFullyVisited(left, depth);
+  if (!isFull) return isFull;
+
+  for (auto right : node->rights) isFull &= isFullyVisited(right, depth);
   return isFull;
 }
 
@@ -239,17 +241,17 @@ void ExecutionTree::printTree(const TreeNode* node, uint32_t depth,
   if (!node || depth > limitDepth) return;
 
   // 先处理左子树（taken = false）
-  if (node->left) {
-    printNodeWithIndent(node->left, depth);
-    if (isFullPrint || !isFullyBuilt(node->left))
-      printTree(node->left, depth + 1, limitDepth, isFullPrint);
+  for (const TreeNode *left : node->lefts){
+    printNodeWithIndent(left, depth);
+    if (isFullPrint || !isFullyBuilt(left))
+      printTree(left, depth + 1, limitDepth, isFullPrint);
   }
 
   // 再处理右子树（taken = true）
-  if (node->right) {
-    printNodeWithIndent(node->right, depth);
-    if (isFullPrint || !isFullyBuilt(node->right))
-      printTree(node->right, depth + 1, limitDepth, isFullPrint);
+  for (const TreeNode *right : node->rights){
+    printNodeWithIndent(right, depth);
+    if (isFullPrint || !isFullyBuilt(right))
+      printTree(right, depth + 1, limitDepth, isFullPrint);
   }
 }
 
@@ -258,53 +260,74 @@ void ExecutionTree::printTree(const TreeNode* node, uint32_t depth,
 TreeNode *ExecutionTree::updateTree(TreeNode *currNode, const PCTNode& pctNode){
 
   currNode->status = HasVisited;
+  TreeNode *nextNode = root;
 
   if (pctNode.taken) { /// left is the true branch
-    if (currNode->left) {
-      if (currNode->left->data.constraint->hash() != pctNode.constraint->hash()) {
-        // if path is divergent, try to rebuild it !
-
-        fullCache.clear();
-        currNode->left = constructTreeNode(currNode, pctNode);
-        currNode->left->isDiverse = true;
+    if (!currNode->lefts.empty()) {
+      // find matched left node
+      for (TreeNode *left : currNode->lefts){
+        if (left->data.constraint->hash() == pctNode.constraint->hash()){
+          nextNode = left;
+          break;
+        }
       }
 
-      currNode->left->data.taken = true;
+      // no match, currNode is diverse
+      if (nextNode == root){
+        TreeNode *newLeft = constructTreeNode(currNode, pctNode);
+        currNode->lefts.push_back(newLeft);
+        nextNode = newLeft;
+      }
+
     } else {
-      currNode->left = constructTreeNode(currNode, pctNode);
+      TreeNode *newLeft = constructTreeNode(currNode, pctNode);
+      currNode->lefts.push_back(newLeft);
+      nextNode = newLeft;
     }
 
-    if (!currNode->right) {
-      currNode->right = constructTreeNode(currNode, pctNode);
-      currNode->right->data.taken = false;
+    if (currNode->rights.empty()) {
+      TreeNode *newRight = constructTreeNode(currNode, pctNode);
+      newRight->data.taken = false;
+      currNode->rights.push_back(newRight);
     }
 
-    currNode = currNode->left;
+    nextNode->data.taken = true;
+
   } else {
-    if (currNode->right) {
-      if (currNode->right->data.constraint->hash() != pctNode.constraint->hash()) {
-        // if path is divergent, try to rebuild it !
-
-        fullCache.clear();
-        currNode->right = constructTreeNode(currNode, pctNode);
-        currNode->right->isDiverse = true;
+    if (!currNode->rights.empty()) {
+      // find matched right node
+      for (TreeNode *right : currNode->rights){
+        if (right->data.constraint->hash() == pctNode.constraint->hash()){
+          nextNode = right;
+          break;
+        }
       }
 
-      currNode->right->data.taken = false;
+      // no match, currNode is diverse
+      if (nextNode == root){
+        TreeNode *newRight = constructTreeNode(currNode, pctNode);
+        currNode->rights.push_back(newRight);
+        nextNode = newRight;
+      }
+
+
     } else {
-      currNode->right = constructTreeNode(currNode, pctNode);
+      TreeNode *newRight = constructTreeNode(currNode, pctNode);
+      currNode->rights.push_back(newRight);
+      nextNode = newRight;
     }
 
-    if (!currNode->left) {
-      currNode->left = constructTreeNode(currNode, pctNode);
-      currNode->left->data.taken = true;
+    if (currNode->lefts.empty()) {
+      TreeNode *newLeft = constructTreeNode(currNode, pctNode);
+      newLeft->data.taken = true;
+      currNode->lefts.push_back(newLeft);
     }
 
-    currNode = currNode->right;
+    nextNode->data.taken = false;
   }
 
-  currNode->status = HasVisited;
-  return currNode;
+  nextNode->status = HasVisited;
+  return nextNode;
 }
 
 std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
@@ -319,7 +342,7 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
     worklist.pop();
 
     if (node->depth > depth ||
-        node->isDiverse)
+        node->isDiverse())
       continue;
 
     if (node->status == HasVisited && node->isLeaf()){
@@ -328,19 +351,59 @@ std::vector<TreeNode *> ExecutionTree::selectTerminalNodes(uint32_t depth) {
       continue;
     }
 
-    if (node->left)  worklist.push(node->left);
-    if (node->right) worklist.push(node->right);
+    for (auto left : node->lefts) worklist.push(left);
+    for (auto right : node->rights) worklist.push(right);
   }
 
   return terminal;
+}
+
+std::set<uint32_t> ExecutionTree::findReadIdx(qsym::ExprRef e){
+  std::vector<qsym::ExprRef> stack;
+  std::set<uint32_t> index;
+
+  stack.push_back(e);
+
+  while (!stack.empty()) {
+    qsym::ExprRef top = stack.back();
+    stack.pop_back();
+
+    std::shared_ptr<qsym::ReadExpr> re = qsym::castAs<qsym::ReadExpr>(top);
+    if (re != NULL) {
+      index.insert(re->index());
+    } else {
+      for (INT32 i = 0; i < top->num_children(); i++) {
+        qsym::ExprRef k = top->getChild(i);
+        stack.push_back(k);
+      }
+    }
+  }
+  return index;
+}
+
+bool ExecutionTree::isDeadNodeStrict(TreeNode *node){
+  std::set<uint32_t> relativeIndex;
+
+  auto currNode = node;
+  while (currNode != getRoot()) {
+    auto index = findReadIdx(currNode->data.constraint);
+    relativeIndex.insert(index.begin(), index.end());
+    currNode = currNode->parent;
+  }
+
+  uint32_t SAMPLE_MAX = 10;
+  std::vector<std::vector<uint8_t>> sampledInputs =
+      sampleValues(node, relativeIndex, SAMPLE_MAX);
+
+  return sampledInputs.size() == 1;
 }
 
 std::vector<TreeNode *> ExecutionTree::selectDeadNode(uint32_t depth) {
   std::vector<TreeNode*> deadNode;
   if (!root) return deadNode;
 
-  std::set<uint32_t> deadBB = g_searcher->computeDeadBB();
-  if (deadBB.empty()) return deadNode;
+  std::set<uint32_t> *deadBB = g_searcher->computeDeadBB();
+  if (deadBB->empty()) return deadNode;
 
   std::queue<TreeNode*> worklist;
   worklist.push(root);
@@ -350,23 +413,23 @@ std::vector<TreeNode *> ExecutionTree::selectDeadNode(uint32_t depth) {
     worklist.pop();
 
     if (node->depth > depth ||
-        node->isDiverse)
+        node->isDiverse())
       continue;
 
-    if (isFullyBuilt(node)){
-      deadNode.push_back(node);
+    if (isFullyBuilt(node) && isDeadNodeStrict(node)){
+        deadNode.push_back(node);
       continue;
     }
 
-    if (deadBB.find(node->data.currBB) != deadBB.end() &&
+    if (deadBB->find(node->data.currBB) != deadBB->end() &&
         node != root){
       // no expand, kill early
       deadNode.push_back(node);
       continue;
     }
 
-    if (node->left)  worklist.push(node->left);
-    if (node->right) worklist.push(node->right);
+    for (auto left : node->lefts) worklist.push(left);
+    for (auto right : node->rights) worklist.push(right);
   }
 
   return deadNode;
@@ -393,8 +456,8 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(uint32_t depth) 
       continue;
     }
 
-    if (node->left)  worklist.push(node->left);
-    if (node->right) worklist.push(node->right);
+    for (auto left : node->lefts) worklist.push(left);
+    for (auto right : node->rights) worklist.push(right);
   }
 
   return willbeVisited;
@@ -436,7 +499,7 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
   if (new_case.empty())
     node->status = UnReachable;
   else
-    node->status = HasVisited;
+    node->status = HasSolved;
 
   return new_case;
 }
@@ -457,6 +520,8 @@ std::vector<UINT8> ExecutionTree::generateValues(TreeNode *node){
   // NOTE ! the HasVisited must set in UPDATETREE
   if (new_case.empty())
     node->status = UnReachable;
+  else
+    node->status = HasSolved;
 
   return new_case;
 }
@@ -464,7 +529,9 @@ std::vector<UINT8> ExecutionTree::generateValues(TreeNode *node){
 std::vector<std::vector<uint8_t>> ExecutionTree::sampleValues(
     TreeNode *node, const std::set<uint32_t>& index, uint32_t N){
   fs::path input_file = node->data.input_file;
+
   std::vector<qsym::ExprRef> constraints = getConstraints(node);
+  constraints[0] = g_expr_builder->createLNot(constraints[0]);
 
   std::vector<std::vector<uint8_t>> sampleIndexValues;
 
@@ -525,7 +592,7 @@ std::vector<TreeNode *> ExecutionTree::selectNodesFromDepth(
   for (uint32_t dep = 0; dep < evaluator_depth; dep++){
     for (uint32_t idx = 0; idx < tobeVisited[dep].size(); idx++){
       TreeNode *node = tobeVisited[dep][idx];
-      if (!node->isDiverse && node->status == WillbeVisit){
+      if (!node->isDiverse() && node->status == WillbeVisit){
         selectedNodes.push_back(node);
       }
     }
@@ -564,4 +631,86 @@ std::vector<TreeNode *> ExecutionTree::selectNodesFromGroup(uint32_t N){
     if (!madeProgress) break;
   }
   return selectedNodes;
+}
+
+std::vector<TreeNode *> ExecutionTree::selectNodesFromDist(uint32_t N){
+  std::vector<TreeNode *> selectedNodes;
+  std::vector<std::pair<uint32_t, TreeNode*>> nodeDistList;
+
+  std::map<uint32_t, uint32_t>* dist = g_searcher->computeDistToUncovered();
+
+  for (const auto& entry : tobeVisited) {
+    for (TreeNode* node : entry.second) {
+      auto it = dist->find(node->data.currBB);
+      if (it != dist->end()) {
+        nodeDistList.emplace_back(it->second, node);
+      }else{
+        node->status = UnReachable;
+      }
+    }
+  }
+
+  // Step 2: 按距离升序排序（距离相同可任意顺序）
+  std::sort(nodeDistList.begin(), nodeDistList.end(),
+            [](const auto& a, const auto& b) {
+              return a.first < b.first;
+            });
+
+  // Step 3: 取前 N 个节点
+  size_t count = N;
+  if (N > nodeDistList.size())
+    count = nodeDistList.size();
+
+  for (size_t i = 0; i < count; ++i)
+    selectedNodes.push_back(nodeDistList[i].second);
+
+  return selectedNodes;
+}
+
+
+TreeNode * ExecutionTree::selectBestVisitedNode(
+    std::set<uint32_t> selectedID, uint32_t maxRead){
+
+  std::map<uint32_t, uint32_t>* dist = g_searcher->computeDistToUncovered();
+
+  TreeNode* bestNode = nullptr;
+  uint32_t bestDist = UINT32_MAX;
+  uint32_t bestDepth = UINT32_MAX;
+
+  std::queue<TreeNode*> worklist;
+  worklist.push(root);
+
+  while (!worklist.empty()) {
+    TreeNode *node = worklist.front();
+    worklist.pop();
+
+    if (node->data.maxRead > maxRead + 5) {
+      continue;
+    }
+    auto distIt = dist->find(node->data.currBB);
+
+    if (node->status != UnReachable && node->data.maxRead >= maxRead) {
+      if (!bestNode && node != root){
+        bestDist = 99999;
+        bestDepth = node->depth;
+        bestNode = node;
+      }else if (distIt != dist->end() &&
+        selectedID.find(node->id) == selectedID.end()){
+        uint32_t d = distIt->second;
+        uint32_t depth = node->depth;
+
+        if (d < bestDist || (d == bestDist && depth < bestDepth)) {
+          bestDist = d;
+          bestDepth = depth;
+          bestNode = node;
+        }
+      }
+    }
+
+    // 继续遍历子树
+    for (auto left : node->lefts) worklist.push(left);
+    for (auto right : node->rights) worklist.push(right);
+  }
+
+  return bestNode;
 }

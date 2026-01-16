@@ -41,7 +41,7 @@ cl::opt<std::string> SymCCTargetBin(
 
 constexpr seconds STATS_INTERVAL_SEC{60};
 
-uint32_t MAX_DEPTH = 50, BATCH_SIZE = 32;
+uint32_t MAX_DEPTH = 50, BATCH_SIZE = 64;
 uint32_t evaluator_depth = 10;
 
 namespace qsym {
@@ -148,7 +148,7 @@ int main(int argc, char* argv[]) {
   executionTree = new ExecutionTree(g_expr_builder, g_solver, g_searcher);
 
   auto last_evaluator_time = std::chrono::steady_clock::now();
-  uint32_t EvaluatorTimeLimitSec = 30;
+  uint32_t EvaluatorTimeLimitSec = 10;
 
   while (true) {
     auto new_testcase = afl_config.best_new_testcase(state.processed_files);
@@ -174,6 +174,7 @@ int main(int argc, char* argv[]) {
       state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
 
     bool evalutorStatus = false;
+
     std::vector<TreeNode *> willbeVisit =
         executionTree->selectNodesFromDepth(evaluator_depth);
     if (willbeVisit.empty())
@@ -192,18 +193,18 @@ int main(int argc, char* argv[]) {
     bool evaluator_limit = (std::chrono::duration_cast<std::chrono::seconds>(
         now - last_evaluator_time).count() >= EvaluatorTimeLimitSec);
     if (evaluator_limit && evaluator_depth < MAX_DEPTH && evalutorStatus){
-
-      last_evaluator_time = now;
-      evaluator_depth += 2;
       if (build_pct_evaluator(&state)){
         if (EvaluatorTimeLimitSec < 120)
-          EvaluatorTimeLimitSec += 10;
+          EvaluatorTimeLimitSec += 30;
 
         std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << std::endl;
       }else{
         if (EvaluatorTimeLimitSec > 30)
           EvaluatorTimeLimitSec -= 10;
       }
+
+      last_evaluator_time = now;
+      evaluator_depth += 2;
     }
 
     if (duration_cast<seconds>(now - state.last_stats_output) > STATS_INTERVAL_SEC) {
