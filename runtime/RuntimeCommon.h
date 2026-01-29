@@ -43,10 +43,14 @@ extern "C" {
 
 struct BranchNode {
   BranchNode(SymExpr expr, bool taken, uint32_t currBB)
-      : constraint(expr), taken(taken), currBB(currBB){}
+      : constraint(expr), taken(taken), currBB(currBB){
+    hash = constraint->hash();
+    if (!taken) hash = hash >> 1;
+  }
   SymExpr constraint;
   bool taken = false;
   uint32_t currBB = -1;
+  uint32_t hash = 0;
 };
 
 /*

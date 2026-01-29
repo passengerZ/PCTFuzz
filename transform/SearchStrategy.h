@@ -9,13 +9,12 @@ namespace fs = std::filesystem;
 class FunctionCFG {
 public:
   std::string funcName;
-  uint64_t entryBBAddr;                              // 入口基本块 ID
-  std::set<uint64_t> bbAddrs;                          // 本函数内所有 BB ID
-  std::map<uint64_t, std::set<uint32_t>> intraEdges; // 内部转移: srcBBAddr -> {dstBBAddr}
-  std::map<uint64_t, std::vector<std::string>> callEdges; // 调用关系: srcBBAddr -> [calledFuncName]
+  uint32_t entryBBAddr;                              // 入口基本块 ID
+  std::set<uint32_t> bbAddrs;                          // 本函数内所有 BBID
+  std::map<uint32_t, std::set<uint32_t>> intraEdges; // 内部转移: srcBBAddr -> {dstBBAddr}
+  std::map<uint32_t, std::vector<std::string>> callEdges; // 调用关系: srcBBAddr -> [calledFuncName]
 
-  FunctionCFG(const std::string& name)
-      : funcName(name), entryBBAddr(0) {}
+  FunctionCFG() : funcName(""), entryBBAddr(0) {}
 };
 
 
@@ -23,22 +22,20 @@ typedef std::pair<uint32_t, uint32_t> trace;
 class SearchStrategy {
 public:
 
+  uint32_t g_entry = 0;
   SearchStrategy() {
     loadJSON();
-    //computeReachable();
+
+    g_entry = allCFGs["main"].entryBBAddr;
+    collectAllRelevantBBs();
+    computeFullDominators();
   }
 
   std::map<std::string, FunctionCFG> allCFGs;
 
-  std::set<uint32_t> BBID, visBB;
+  std::set<uint32_t> BBID, visBB, releBB, branchBB;
   std::set<trace> Trace;
-  std::map<uint32_t, std::set<uint32_t>>  ICFG,  revICFG;
-
-  bool isUpdateDeadBB = true;
-  std::set<uint32_t> deadBB;
-
-  bool isUpdateDist = true;
-  std::map<uint32_t, uint32_t> dist;
+  std::map<uint32_t, std::set<uint32_t>> ICFG, revICFG, Dominate, revDominate;
 
   void loadJSON(){
     const char *CFGPath = getenv("PCT_CFG_PATH");
@@ -74,7 +71,7 @@ public:
     if (fobj.find("func_name") == fobj.end())
       return;
 
-    FunctionCFG cfg("");
+    FunctionCFG cfg;
 
     // func_name
     cfg.funcName  = fobj.at("func_name").get<std::string>();
@@ -151,6 +148,14 @@ public:
       }
     }
 
+    // 收集所有分支基本块
+    for (const auto& kv : ICFG) {
+      uint32_t branchBBID = kv.first;
+      if (kv.second.size() > 1) {  // 分支基本块定义
+        branchBB.insert(branchBBID);
+      }
+    }
+
 //    std::cerr << "[PCT] BBInfo : ";
 //    for(auto BB : BBID)
 //      std::cerr << " " << (int) BB;
@@ -160,118 +165,131 @@ public:
 //    std::cerr << "\n";
   }
 
+  // 收集从入口可达的所有节点
+  void collectAllRelevantBBs() {
+    std::queue<uint32_t> q;
+    std::unordered_set<uint32_t> visited;
+
+    q.push(g_entry);
+    visited.insert(g_entry);
+    releBB.insert(g_entry);
+
+    while (!q.empty()) {
+      uint32_t node = q.front(); q.pop();
+
+      auto it = ICFG.find(node);
+      if (it != ICFG.end()) {
+        for (uint32_t succ : it->second) {
+          if (visited.find(succ) == visited.end()) {
+            visited.insert(succ);
+            releBB.insert(succ);
+            q.push(succ);
+          }
+        }
+      }
+    }
+  }
+
+  // 计算全图支配关系（标准迭代算法）
+  void computeFullDominators() {
+    for (uint32_t node : releBB) {
+      if (node == g_entry) {
+        revDominate[node] = {g_entry};  // 入口只支配自己
+      } else {
+        revDominate[node] = releBB;  // 初始化为全集
+      }
+    }
+
+    // 2. 生成处理顺序（BFS拓扑序近似）
+    std::vector<uint32_t> order = getProcessingOrder();
+
+    // 3. 迭代计算直到收敛
+    bool changed = true;
+    while (changed) {
+      changed = false;
+
+      for (uint32_t node : order) {
+        if (node == g_entry) continue;
+
+        // 计算所有前驱支配集的交集
+        std::set<uint32_t> intersection;
+        bool firstPred = true;
+
+        auto predIt = revICFG.find(node);
+        if (predIt != revICFG.end()) {
+          for (uint32_t pred : predIt->second) {
+            if (releBB.find(pred) == releBB.end()) continue;
+
+            if (firstPred) {
+              intersection = revDominate[pred];
+              firstPred = false;
+            } else {
+              std::set<uint32_t> temp;
+              std::set_intersection(
+                  intersection.begin(), intersection.end(),
+                  revDominate[pred].begin(), revDominate[pred].end(),
+                  std::inserter(temp, temp.begin())
+              );
+              intersection = temp;
+            }
+          }
+        }
+
+        // 如果没有前驱（除入口外），跳过
+        if (firstPred) continue;
+
+        // 添加当前节点
+        intersection.insert(node);
+
+        // 检查是否变化
+        if (intersection != revDominate[node]) {
+          revDominate[node] = intersection;
+          changed = true;
+        }
+      }
+    }
+
+    for (const auto& it : revDominate)
+      for (auto prevBBID : it.second)
+        Dominate[prevBBID].insert(it.first);
+  }
+
+  // 生成处理顺序（BFS顺序）
+  std::vector<uint32_t> getProcessingOrder() const {
+    std::vector<uint32_t> order;
+    std::queue<uint32_t> q;
+    std::unordered_set<uint32_t> visited;
+
+    q.push(g_entry);
+    visited.insert(g_entry);
+
+    while (!q.empty()) {
+      uint32_t node = q.front(); q.pop();
+      order.push_back(node);
+
+      auto it = ICFG.find(node);
+      if (it != ICFG.end()) {
+        for (uint32_t succ : it->second) {
+          if (releBB.find(succ) != releBB.end() &&
+              visited.find(succ) == visited.end()) {
+            visited.insert(succ);
+            q.push(succ);
+          }
+        }
+      }
+    }
+
+    return order;
+  }
+
 
   bool updateVisBB(uint32_t newBB) {
     if (BBID.find(newBB) == BBID.end())
       return false;
     auto isCoverNew = visBB.insert(newBB);
-    if (isCoverNew.second){
-      isUpdateDeadBB = true;
-      isUpdateDist   = true;
-    }
-
     return isCoverNew.second;
   }
 
-  std::map<uint32_t, uint32_t> *computeDistToUncovered() {
-    if (!isUpdateDist)
-      return &dist;
-    dist.clear();
-
-    // Step 1: 计算未覆盖块
-    std::set<uint32_t> uncovered;
-    std::set_difference(BBID.begin(), BBID.end(),
-                        visBB.begin(), visBB.end(),
-                        std::inserter(uncovered, uncovered.begin()));
-
-    if (uncovered.empty())
-      return &dist; // 空 map
-
-    // Step 2: 反向 BFS，记录最短跳转次数
-    std::queue<uint32_t> q;
-
-    // 初始化：所有 uncovered 块距离为 0
-    for (uint32_t bb : uncovered) {
-      dist[bb] = 0;
-      q.push(bb);
-    }
-
-    // BFS
-    while (!q.empty()) {
-      uint32_t current = q.front();
-      q.pop();
-
-      // 遍历 current 在反向图 revICFG 中的前驱（即原图中能跳到 current 的节点）
-      auto it = revICFG.find(current);
-      if (it != revICFG.end()) {
-        for (uint32_t pred : it->second) {
-          // 如果前驱尚未访问（即不在 dist 中）
-          if (dist.find(pred) == dist.end()) {
-            dist[pred] = dist[current] + 1;
-            q.push(pred);
-          }
-        }
-      }
-    }
-
-    return &dist;
-  }
-
-  std::set<uint32_t> *computeDeadBB() {
-    if (!isUpdateDeadBB)
-      return &deadBB;
-
-    deadBB.clear();
-
-    // Step 1: 计算未覆盖块
-    std::set<uint32_t> uncovered;
-    std::set_difference(BBID.begin(), BBID.end(),
-                        visBB.begin(), visBB.end(),
-                        std::inserter(uncovered, uncovered.begin()));
-
-    // 如果没有未覆盖块，则所有已覆盖块都无法到达“未覆盖块”（因为不存在）
-    if (uncovered.empty()) {
-      return &deadBB;
-    }
-
-    // Step 2: 反向 BFS —— 从所有 uncovered 块出发，在 revICFG 上遍历
-    std::unordered_set<uint32_t> canReachUncovered; // 使用 unordered_set 加速查找
-    std::queue<uint32_t> q;
-
-    // 初始化队列：所有 uncovered 块
-    for (uint32_t bb : uncovered) {
-      canReachUncovered.insert(bb);
-      q.push(bb);
-    }
-
-    // BFS
-    while (!q.empty()) {
-      uint32_t current = q.front();
-      q.pop();
-
-      // 遍历 current 在反向图中的前驱（即原图中能跳到 current 的节点）
-      auto it = revICFG.find(current);
-      if (it != revICFG.end()) {
-        for (uint32_t pred : it->second) {
-          // 如果前驱还没被访问过，加入队列
-          if (canReachUncovered.insert(pred).second) {
-            q.push(pred);
-          }
-        }
-      }
-    }
-
-    // Step 3: deadBB = visitedBB - canReachUncovered
-    for (uint32_t bb : visBB) {
-      if (ICFG[bb].size() < 2) continue;
-      if (canReachUncovered.find(bb) == canReachUncovered.end()) {
-        deadBB.insert(bb);
-      }
-    }
-
-    isUpdateDeadBB = false;
-    return &deadBB;
-  }
 
 private:
   std::vector<std::string> getCFGFiles(const std::string& dirPath) {

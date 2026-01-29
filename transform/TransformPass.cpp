@@ -293,27 +293,16 @@ std::vector<uint8_t> TransformPass::readInput(std::string input_file, uint32_t N
   return input;
 }
 
-std::vector<uint8_t> TransformPass::validInput(
-    ExecutionTree * executionTree, TreeNode *leafNode) {
-  TreeNode *nagetiveNode = leafNode->parent->lefts[0];
-  if (nagetiveNode == leafNode)
-    nagetiveNode = leafNode->parent->rights[0];
-
-  assert(nagetiveNode->status != UnReachable);
-
-  std::vector<uint8_t> newInput;
-
-  // get solution from SMT solver
-  newInput = executionTree->generateValues(nagetiveNode);
-  return newInput;
-}
-
 bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
-                                   std::vector<TreeNode *> *deadNodes) {
-  program = std::make_shared<CXXProgram>();
+                                   std::vector<DeadZone> *deadZones) {
 
-  if (deadNodes->size() < 2)
-    return false;
+  // sort the dead zone
+  std::sort(deadZones->begin(), deadZones->end(),
+            [](const DeadZone& a, const DeadZone& b) {
+              return a.domNodes.size() < b.domNodes.size();
+            });
+
+  program = std::make_shared<CXXProgram>();
 
   insertHeaderIncludes();
 
@@ -325,7 +314,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
   getCurrentBlock()->statements.push_back(srandStmt);
 
   std::string forStr = "for(int i=0; i<" +
-                       std::to_string(deadNodes->size())
+                       std::to_string(deadZones->size())
                        + "; i++){";
   auto forBeginStmt = std::make_shared<CXXGenericStatement>(
       getCurrentBlock().get(), forStr);
@@ -334,31 +323,20 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
   uint32_t g_read_idx = 0, curr_read_max = 0;
 
   // Generate constraint branches
-  uint32_t leafIndex = 1;
-  uint32_t SAMPLE_MAX = 16;
+  uint32_t SampleSize = 16;
   std::set<uint32_t> selectedBestID;
-  for (TreeNode *leafNode : *deadNodes){
-
-    auto currNode = leafNode;
+  for (const auto &zone : *deadZones){
+    auto leafNode = zone.domNodes[0];
+    auto leafIdxs = findReadIdx(leafNode->data.constraint);
 
     // build the byte size guard
     curr_read_max = 0;
-    std::set<uint32_t> relativeIndex;
-    while (currNode != executionTree->getRoot()) {
-      auto index = findReadIdx(currNode->data.constraint);
+    for (TreeNode *node : zone.domNodes){
+      auto index = findReadIdx(node->data.constraint);
       for (uint32_t id : index)
         if (id > curr_read_max)
           curr_read_max = id;
-      relativeIndex.insert(index.begin(), index.end());
-      currNode = currNode->parent;
     }
-
-    // check nagetive node can be reached ?
-    std::vector<std::vector<uint8_t>> sampledInputs =
-        executionTree->sampleValues(leafNode, relativeIndex, SAMPLE_MAX);
-
-    // soft constriants, don't need to check
-    if (sampledInputs.size() == SAMPLE_MAX) continue;
 
     if (curr_read_max > g_read_idx){
       g_read_idx = curr_read_max;
@@ -366,19 +344,16 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
     }
 
     // build the conditions
-    currNode = leafNode;
     std::vector<std::string> conditions;
-    while (currNode != executionTree->getRoot()) {
-      qsym::ExprRef expr = currNode->data.constraint;
+    for (TreeNode *node : zone.domNodes){
+      qsym::ExprRef expr = node->data.constraint;
 
       doDFSPostOrderTraversal(expr);
 
       std::string condition(getSymbolFor(expr));
-      if (!currNode->data.taken)
+      if (!node->data.taken)
         condition = "!" + condition;
-      conditions.push_back(condition);
-
-      currNode = currNode->parent;
+      conditions.push_back(std::move(condition));
     }
 
     if (conditions.empty()) continue;
@@ -394,33 +369,14 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
         getCurrentBlock().get(), exitIfCondition);
     auto trueBlock = std::make_shared<CXXCodeBlock>(program.get());
 
-    /*
-    // select fixed best node
-    TreeNode *bestNode =
-        executionTree->selectBestVisitedNode(selectedBestID, curr_read_max);
-    selectedBestID.insert(bestNode->id);
-
-    // build the repaired code block
-    auto deadInput = readInput(leafNode->data.input_file, curr_read_max);
-    auto bestInput = readInput(bestNode->data.input_file, curr_read_max);
-    for (uint32_t readID = 0; readID <= curr_read_max; readID++){
-//      if (deadInput[readID] == bestInput[readID])
-//        continue;
-
-      std::string repairStr = "data[" + std::to_string(readID) + "] = "
-                              + std::to_string(bestInput[readID]) + ";";
-      auto repairStmt = std::make_shared<CXXGenericStatement>(
-          trueBlock.get(), repairStr);
-      trueBlock->statements.push_back(repairStmt);
-    }
-
-    auto continueStmt = std::make_shared<CXXGenericStatement>(
-        trueBlock.get(), "continue;");
-    trueBlock->statements.push_back(continueStmt);
-    */
 
     // build the fix code
-    if (sampledInputs.empty()) {
+
+    // check nagetive node can be reached ?
+    std::vector<std::vector<uint8_t>> sampledInputs =
+        executionTree->sampleDeadValues(&zone, leafIdxs, SampleSize);
+
+    if (sampledInputs.empty() || sampledInputs.size() == SampleSize) {
       // nagetive path unsat, return 0
       auto returnStmt = std::make_shared<CXXGenericStatement>(
           trueBlock.get(), "return 0;");
@@ -428,16 +384,18 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
 
     } else if (sampledInputs.size() == 1) {
 
-      for (auto id : relativeIndex){
+      uint32_t i = 0;
+      for (auto id : leafIdxs){
         std::string repairStr = "data[" + std::to_string(id) + "] = "
-                                + std::to_string(sampledInputs[0][id]) + ";";
+                                + std::to_string(sampledInputs[0][i]) + ";";
         auto repairStmt  = std::make_shared<CXXGenericStatement>(
             trueBlock.get(), repairStr);
         trueBlock->statements.push_back(repairStmt);
+        i++;
       }
 
       auto continueStmt = std::make_shared<CXXGenericStatement>(
-          trueBlock.get(), "continue;");
+          trueBlock.get(), "return 1;");
       trueBlock->statements.push_back(continueStmt);
 
     }else {
@@ -450,9 +408,9 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       // continue;
 
       std::string sampleStr  = std::to_string(sampledInputs.size());
-      std::string varSizeStr = std::to_string(relativeIndex.size());
-      std::string arrDefine = "static const uint8_t vals["
-        + sampleStr + "]["  + varSizeStr + "] = {";
+      std::string varSizeStr = std::to_string(leafIdxs.size());
+      std::string arrDefine  = "static const uint8_t vals["
+                               + sampleStr + "]["  + varSizeStr + "] = {";
       for (const auto& inputs : sampledInputs)
         for (uint8_t val : inputs)
           arrDefine += std::to_string(val) + ", ";
@@ -467,7 +425,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       trueBlock->statements.push_back(randStmt);
 
       uint32_t cnt = 0;
-      for (auto id : relativeIndex){
+      for (auto id : leafIdxs){
         std::string repairStr = "data[" + std::to_string(id) + "] = vals[idx]["
                                 + std::to_string(cnt) + "];";
         auto repairStmt  = std::make_shared<CXXGenericStatement>(
@@ -477,7 +435,7 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       }
 
       auto continueStmt = std::make_shared<CXXGenericStatement>(
-          trueBlock.get(), "continue;");
+          trueBlock.get(), "return 1;");
       trueBlock->statements.push_back(continueStmt);
     }
 
@@ -485,8 +443,6 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
     ifStatement->trueBlock = trueBlock;
     ifStatement->falseBlock = nullptr;
     getCurrentBlock()->statements.push_back(ifStatement);
-
-    leafIndex ++;
   }
 
   insertFuzzingTarget(fuzzFn->defn);

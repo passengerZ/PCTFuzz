@@ -8,7 +8,7 @@ namespace {
 
 const uint64_t kUsToS = 1000000;
 const int kSessionIdLength = 32;
-const unsigned kSolverTimeout = 10000; // 10 seconds
+const unsigned kSolverTimeout = 1000; // 1 seconds
 
 std::string toString6digit(INT32 val) {
   char buf[6 + 1]; // ndigit + 1
@@ -121,8 +121,6 @@ void Solver::pop() {
 
 void Solver::add(z3::expr expr) {
   if (!expr.is_const()){
-    if (!expr.is_bool())
-      expr = expr.bit2bool(0);
     solver_.add(expr.simplify());
   }
 }
@@ -331,6 +329,7 @@ void Solver::readInput() {
   }
 
   char ch;
+  inputs_.clear();
   while (ifs.get(ch))
     inputs_.push_back((UINT8)ch);
 }

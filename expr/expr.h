@@ -295,6 +295,9 @@ class Expr : public DependencyNode {
 
     ExprRef evaluate();
 
+    // add by zgf
+    ExprRef rebuild(std::map<UINT32, UINT32> *repalce);
+
   protected:
     Kind kind_;
     UINT32 bits_;
@@ -333,6 +336,7 @@ class Expr : public DependencyNode {
     virtual void hashAux(XXH32_state_t* state) { return; }
     virtual bool equalAux(const Expr& other) const { return true; }
     virtual ExprRef evaluateImpl() = 0;
+    virtual ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) = 0; // add by zgf
 
 }; // class Expr
 
@@ -404,6 +408,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
   llvm::APInt value_;
 };
 
@@ -427,6 +432,7 @@ public:
 
 protected:
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 };
 
 class BinaryExpr : public NonConstantExpr {
@@ -447,6 +453,7 @@ public:
   void print(ostream& os, UINT depth, const char* op) const;
 protected:
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 };
 
 class LinearBinaryExpr : public BinaryExpr {
@@ -500,6 +507,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
   bool value_;
 };
 
@@ -522,7 +530,7 @@ public:
 
 protected:
   bool printAux(ostream& os) const override {
-    os << "index=" << hexstr(index_);
+    os << "index=" << index_;
     return true;
   }
 
@@ -542,6 +550,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
   UINT32 index_;
 };
 
@@ -574,6 +583,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 };
 
 class ExtractExpr : public UnaryExpr {
@@ -612,6 +622,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 
   UINT32 index_;
 };
@@ -652,6 +663,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 };
 
 class SExtExpr : public ExtExpr {
@@ -677,6 +689,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 };
 
 class NotExpr : public UnaryExpr {
@@ -1208,6 +1221,7 @@ protected:
   }
 
   ExprRef evaluateImpl() override;
+  ExprRef rebuildImpl(std::map<UINT32, UINT32> *repalce) override;
 };
 
 // utility functions

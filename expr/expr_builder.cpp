@@ -537,8 +537,15 @@ ExprRef ConstantFoldingExprBuilder::createLAnd(ExprRef l, ExprRef r) {
 
   if (be0 != NULL && be1 != NULL)
     return createBool(be0->value() && be1->value());
-  else
-    return ExprBuilder::createLAnd(l, r);
+
+  ConstantExprRef ce0 = castAs<ConstantExpr>(l);
+  ConstantExprRef ce1 = castAs<ConstantExpr>(r);
+
+  if (ce0 != NULL && ce1 != NULL)
+    return createBool(ce0->value().getBoolValue() &&
+                      ce1->value().getBoolValue());
+
+  return ExprBuilder::createLAnd(l, r);
 }
 
 ExprRef ConstantFoldingExprBuilder::createLOr(ExprRef l, ExprRef r) {
@@ -571,6 +578,11 @@ ExprRef ConstantFoldingExprBuilder::createIte(ExprRef expr_cond,
     ExprRef expr_true, ExprRef expr_false) {
   if (auto be = castAs<BoolExpr>(expr_cond)) {
     if (be->value())
+      return expr_true;
+    else
+      return expr_false;
+  }else if (auto ce = castAs<ConstantExpr>(expr_cond)) {
+    if (ce->value().getBoolValue())
       return expr_true;
     else
       return expr_false;
@@ -624,7 +636,7 @@ ExprRef ConstantFoldingExprBuilder::createLNot(ExprRef e) {
   if (BoolExprRef be = castAs<BoolExpr>(e))
     return createBool(!be->value());
   else if (ConstantExprRef ce = castAs<ConstantExpr>(e))
-    return createBool(ce->value().getZExtValue() != 0);
+    return createBool(ce->value().getBoolValue());
   else if (auto ite = castAs<IteExpr>(e)){
     if (auto expr_true = castAs<BoolExpr>(ite->getChild(1))){
       return createEqual(e->getChild(0), createConstant(1, 1));
@@ -1110,6 +1122,12 @@ ExprRef SymbolicExprBuilder::createLAnd(ExprRef l, ExprRef r) {
   if (auto BE_R = castAs<BoolExpr>(r))
     return BE_R->value() ? l : createFalse();
 
+  if (auto CE_L = castAs<ConstantExpr>(l))
+    return CE_L->value().getBoolValue() ? r : createFalse();
+
+  if (auto CE_R = castAs<ConstantExpr>(r))
+    return CE_R->value().getBoolValue() ? l : createFalse();
+
   return ExprBuilder::createLAnd(l, r);
 }
 
@@ -1128,7 +1146,7 @@ ExprRef SymbolicExprBuilder::createIte(
   if (auto BE = castAs<BoolExpr>(expr_cond))
     return BE->value() ? expr_true : expr_false;
   if (auto CE = castAs<ConstantExpr>(expr_cond))
-    return (CE->value().getZExtValue() != 0) ? expr_true : expr_false;
+    return (CE->value().getBoolValue()) ? expr_true : expr_false;
   if (auto NE = castAs<LNotExpr>(expr_cond))
     return createIte(NE->expr(), expr_false, expr_true);
   return ExprBuilder::createIte(expr_cond, expr_true, expr_false);

@@ -5,7 +5,6 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 #include <optional>
 
@@ -41,9 +40,6 @@ cl::opt<std::string> SymCCTargetBin(
 
 constexpr seconds STATS_INTERVAL_SEC{60};
 
-uint32_t MAX_DEPTH = 50, BATCH_SIZE = 16;
-uint32_t evaluator_depth = 10;
-
 namespace qsym {
 ExprBuilder *g_expr_builder;
 Solver *g_solver;
@@ -53,61 +49,38 @@ z3::context *g_z3_context;
 SearchStrategy *g_searcher;
 ExecutionTree *executionTree;
 
-
-std::set<uint32_t> lastExitNodes;
-
 uint32_t solved_pct(std::vector<TreeNode *> *tobeExplores,
                     State *state, SymCC *symcc, AflConfig* afl_config){
   if (tobeExplores->empty())
     return 0;
 
-  int covNewCnt = 0;
+  uint32_t solved = 0;
+  std::vector<std::string> validTestcases;
   for (auto node : *tobeExplores){
+    std::cerr << "S|";
     std::string testcase = executionTree->generateTestCase(node);
     if (testcase.empty())
       continue;
 
-    bool isCovNew = state->run_pct_input(
-        testcase, *symcc, *afl_config, executionTree);
-    if (isCovNew){
-      state->solved.current_id++;
-      covNewCnt ++;
-    }
+    solved ++;
+    state->solved.current_id++;
+    validTestcases.push_back(testcase);
   }
+  std::cerr << "\n";
+
+  uint32_t covNewCnt = state->run_pct_input(
+      &validTestcases, *symcc, *afl_config);
+
+  if (covNewCnt > 0 &&
+      executionTree->visBB.size() > (g_searcher->branchBB.size() >> 6))
+    executionTree->visBB.clear();
+
+  std::cerr << "\n[PCT] nodes: "<< tobeExplores->size()
+            << ", solved: " << solved
+            << ", covnew: " << covNewCnt << "\n";
   return covNewCnt;
 }
 
-bool build_pct_evaluator(State *state){
-  bool isNewEvaluator = false;
-
-  // step (4) : dump the visited leaf node to build failed pass
-  std::vector<TreeNode *> deadNodes =
-      executionTree->selectDeadNode(evaluator_depth);
-  std::set<uint32_t> currTerminalIDs;
-  for (auto node : deadNodes)
-    currTerminalIDs.insert(node->id);
-
-  bool hasChanged = currTerminalIDs != lastExitNodes;
-  std::cerr << "[PCT] Evaluator Changed: " << hasChanged
-            << ", DeadNode Size: " << deadNodes.size()
-            << ", Depth: " << evaluator_depth << "\n";
-
-  if (!hasChanged){
-    return isNewEvaluator;
-  }
-
-  PCT::TransformPass TP;
-  if(TP.buildEvaluator(executionTree, &deadNodes)){
-    // update the changed exit nodes
-    lastExitNodes.clear();
-    lastExitNodes.insert(currTerminalIDs.begin(), currTerminalIDs.end());
-
-    TP.dumpEvaluator(state->evaluator_file.string());
-    isNewEvaluator = true;
-  }
-
-  return isNewEvaluator;
-}
 }
 // =============================================================================
 // Main
@@ -152,10 +125,15 @@ int main(int argc, char* argv[]) {
   g_searcher = new SearchStrategy();
   executionTree = new ExecutionTree(g_expr_builder, g_solver, g_searcher);
 
+  std::vector<DeadZone> deadZones;
+  std::set<uint32_t> deadBB;
+
 //  auto last_evaluator_time = std::chrono::steady_clock::now();
 //  uint32_t EvaluatorTimeLimitSec = 10;
 
-  int cnt = 0;
+  uint32_t cnt = 0, stable = 0;
+  bool updateDeadZone = false;
+
   while (true) {
     cnt ++;
     std::cerr << "[PCT] Loops : " << cnt << "\n";
@@ -166,12 +144,11 @@ int main(int argc, char* argv[]) {
       std::cerr << "[PCT] Sync AFL++ best : " << new_testcase.value().string()
                 << ", file size : " << fsize << "\n";
 
-//      fs::path local_afl_seed = symcc.copy_testcase(
-//          *new_testcase, state.sync, new_testcase.value());
-
       state.processed_files.insert(new_testcase.value());
+      fs::path local_testcase =
+          SymCC::copy_testcase(new_testcase.value(), state.sync, new_testcase.value());
       state.run_afl_input(
-          new_testcase.value(), symcc, afl_config, executionTree);
+          local_testcase, symcc, afl_config, executionTree);
     }
     else{
       std::this_thread::sleep_for(seconds(3));
@@ -179,6 +156,72 @@ int main(int argc, char* argv[]) {
 
     // compute the evaluator
     auto now = std::chrono::steady_clock::now();
+
+    // make sure in curr_depth, there are no willbeVisited nodes
+    std::vector<fs::path> unvis_seeds =
+        afl_config.get_unvis_seeds(state.queue.path, state.concoliced_files);
+
+    for (auto ce_seed : unvis_seeds)
+      state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
+
+    std::cerr << "[PCT] Replaied Symcc testcases : " << unvis_seeds.size()
+              << ", left Nodes: " << executionTree->tobeVisited.size() << "\n";
+
+    std::vector<TreeNode *> willbeVisit =
+        executionTree->selectDeepestNodes(32);
+    solved_pct(&willbeVisit, &state, &symcc, &afl_config);
+
+//    std::vector<TreeNode *> willbeVisit2 =
+//        executionTree->selectDFSNodes(&deadBB, 16);
+//    solved_pct(&willbeVisit2, &state, &symcc, &afl_config);
+
+    std::vector<TreeNode *> deadNodes = executionTree->selectDeadNode();
+
+    for (auto node : deadNodes) {
+//      std::cerr << "[LeafBB] :" << node->data.currBB
+//                << " " << node->depth
+//                << " " << node->data.taken
+//                << " " << node->data.constraint->toString() << "\n";
+      uint32_t BBID = node->data.currBB;
+      std::set<uint32_t> domBB = g_searcher->revDominate[BBID];
+
+      DeadZone dzone(BBID);
+
+      auto *currNode = node;
+      while(currNode != executionTree->getRoot()){
+        if (domBB.count(currNode->data.currBB))
+          dzone.domNodes.push_back(currNode);
+
+        currNode = currNode->parent;
+      }
+
+      bool isCollected = false;
+      for (const auto &zone : deadZones)
+        if (zone.equal(&dzone)){
+          isCollected = true;
+          break;
+        }
+
+      if (!isCollected){
+        deadZones.push_back(std::move(dzone));
+        deadBB.insert(node->data.currBB);
+        updateDeadZone = true;
+        stable = 0;
+      }
+    }
+
+    if(stable > 10 && updateDeadZone){
+      PCT::TransformPass TP;
+      TP.buildEvaluator(executionTree, &deadZones);
+      TP.dumpEvaluator(state.evaluator_file.string());
+      std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << "\n";
+      updateDeadZone = false;
+      stable = 0;
+    }else{
+      stable ++;
+    }
+
+    //build_pct_evaluator(&state);
 
     /*
     // make sure in curr_depth, there are no willbeVisited nodes
@@ -228,14 +271,7 @@ int main(int argc, char* argv[]) {
 
       last_evaluator_time = now;
       evaluator_depth += 2;
-    }
-
-    std::vector<TreeNode *> willbeVisit =
-        executionTree->selectWillBeVisitedNodes(BATCH_SIZE);
-    uint32_t covnew = solved_pct(&willbeVisit, &state, &symcc, &afl_config);
-
-    std::cerr << "[PCT] Solved PCT tree nodes : " << willbeVisit.size()
-              << ", CovNew : " << covnew << "\n";*/
+    }*/
 
     if (duration_cast<seconds>(now - state.last_stats_output) > STATS_INTERVAL_SEC) {
       if (!state.stats.log(state.stats_file)) {

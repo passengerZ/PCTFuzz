@@ -70,4 +70,62 @@ namespace qsym {
     return checkExpr(CEB->createIte(c0, c1, c2));
   }
 
+  // add by zgf
+  ExprRef Expr::rebuild(std::map<UINT32, UINT32> *repalce) {
+    return rebuildImpl(repalce);
+  }
+
+  ExprRef ConcatExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    ExprRef c1 = getChild(1)->rebuild(repalce);
+    return CEB->createConcat(c0, c1);
+  }
+
+  ExprRef UnaryExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    return CEB->createUnaryExpr(kind_, c0);
+  }
+
+  ExprRef ReadExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    if (repalce->count(index_) == 0)
+      return CEB->createRead(index_);
+    return CEB->createRead((*repalce)[index_]);
+  }
+
+  ExprRef ConstantExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    return std::make_shared<ConstantExpr>(this->value(), this->bits());
+  }
+
+  ExprRef BoolExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    return std::make_shared<BoolExpr>(this->value());
+  }
+
+  ExprRef BinaryExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    ExprRef c1 = getChild(1)->rebuild(repalce);
+    return CEB->createBinaryExpr(kind_, c0, c1);
+  }
+
+  ExprRef ExtractExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    return CEB->createExtract(c0, index_, bits_);
+  }
+
+  ExprRef ZExtExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    return CEB->createZExt(c0, bits_);
+  }
+
+  ExprRef SExtExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    return CEB->createSExt(c0, bits_);
+  }
+
+  ExprRef IteExpr::rebuildImpl(std::map<UINT32, UINT32> *repalce) {
+    ExprRef c0 = getChild(0)->rebuild(repalce);
+    ExprRef c1 = getChild(1)->rebuild(repalce);
+    ExprRef c2 = getChild(2)->rebuild(repalce);
+    return CEB->createIte(c0, c1, c2);
+  }
+
 } // namespace qsym

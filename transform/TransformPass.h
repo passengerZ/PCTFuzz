@@ -18,6 +18,8 @@ public:
 
   bool buildEvaluator(ExecutionTree *executionTree,
                       std::vector<TreeNode *> *deadNodes);
+  bool buildEvaluator(ExecutionTree *executionTree,
+                      std::vector<DeadZone> *deadZones);
   void dumpEvaluator(const std::string &path);
 
   std::shared_ptr<CXXProgram> program;

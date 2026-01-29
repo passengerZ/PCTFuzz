@@ -44,6 +44,8 @@ public:
   NodeStatus status = WillbeVisit;
   uint32_t id = 0, depth = 0;
 
+  bool isDiverse = false;
+
   Node() : parent(NULL){
     parent = NULL;
   }
@@ -56,16 +58,18 @@ public:
   }
 
   bool isLeaf() const { return lefts.empty() && rights.empty(); }
-  bool isDiverse() const { return lefts.size() > 1 || rights.size() > 1; }
 };
 
 struct PCTreeNode {
   PCTreeNode() : constraint(nullptr), taken(false) {}
 
   PCTreeNode(qsym::ExprRef expr, fs::path input_file,
-             bool taken, uint32_t currBB, uint32_t maxRead)
+             bool taken, uint32_t currBB)
       : constraint(std::move(expr)), input_file(std::move(input_file)),
-        taken(taken), currBB(currBB), maxRead(maxRead) {}
+        taken(taken), currBB(currBB) {
+    hash = constraint->hash();
+    if (!taken) hash = hash >> 1;
+  }
 
   qsym::ExprRef constraint;
   fs::path input_file;
@@ -73,11 +77,29 @@ struct PCTreeNode {
 
   // Record basic block
   uint32_t currBB = -1;
-  uint32_t maxRead = 0;
+  uint32_t hash = 0;
+
+  std::set<uint32_t> idx;
 };
 
 typedef struct PCTreeNode PCTNode;
 typedef Node<PCTNode> TreeNode;
+
+class DeadZone{
+public:
+  uint32_t srcBBID = 0;
+  std::vector<TreeNode *> domNodes;
+  DeadZone(uint32_t srcBBID) : srcBBID(srcBBID) {}
+
+  bool equal(DeadZone *other) const {
+    if (srcBBID != other->srcBBID) return false;
+    if (domNodes.size() != other->domNodes.size()) return false;
+    for (uint32_t i = 0; i < domNodes.size(); i++)
+      if (domNodes[i]->data.hash != other->domNodes[i]->data.hash)
+        return false;
+    return true;
+  }
+};
 
 class ExecutionTree {
 public:
@@ -90,39 +112,33 @@ public:
 
   ~ExecutionTree() { delete root; }
   TreeNode *getRoot() const { return root; }
-  SearchStrategy *getSearcher() const {return g_searcher;}
 
-  void updatePCTree(const fs::path &constraint_file, const fs::path &input);
+  std::set<uint32_t> visBB;
+  std::vector<TreeNode *> tobeVisited;
+
+  bool updatePCTree(const fs::path &constraint_file, const fs::path &input);
 
   TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
     TreeNode *newNode = new Node<PCTNode>(parent, std::move(n));
-    tobeVisited[newNode->depth].push_back(newNode);
+    tobeVisited.push_back(newNode);
     return newNode;
   }
 
   // Export all visited leaf nodes with a depth within N
-  std::vector<TreeNode *> selectTerminalNodes(uint32_t depth);
+  std::vector<TreeNode *> selectDeepestNodes(uint32_t N);
+  std::vector<TreeNode *> selectWillBeVisitedNodes(std::set<uint32_t> *deadBB, uint32_t N);
+  std::vector<TreeNode *> selectDeadNode();
 
-  std::vector<TreeNode *> selectWillBeVisitedNodes(uint32_t N);
-
-  std::vector<TreeNode *> selectDeadNode(uint32_t depth);
-
-  void updateTobeVisited();
-  std::vector<TreeNode *> selectNodesFromDepth(
-      uint32_t evaluator_depth);
-  std::vector<TreeNode *> selectNodesFromGroup(
-      uint32_t N);
-  std::vector<TreeNode *> selectNodesFromDist(
-      uint32_t N);
-  TreeNode *selectBestVisitedNode(std::set<uint32_t> selectedID, uint32_t maxRead);
-
+  std::set<uint32_t> findReadIdx(qsym::ExprRef e);
 
   std::string generateTestCase(TreeNode *node);
-  std::vector<UINT8> generateValues(TreeNode *node);
-  std::vector<std::vector<uint8_t>> sampleValues(
-      TreeNode *node, const std::set<uint32_t>& index, uint32_t N);
+  std::vector<std::vector<uint8_t>> sampleDeadValues(
+      const DeadZone *zone, const std::set<uint32_t>& index, uint32_t N);
 
   void printTree(uint32_t limitDepth, bool isFullPrint = false);
+
+  bool isFullyBuilt(const TreeNode* node);
+  bool isFullyVisited(const TreeNode* node);
 
 private:
   qsym::ExprBuilder *g_expr_builder;
@@ -130,20 +146,16 @@ private:
   SearchStrategy *g_searcher;
 
   TreeNode *root;
-  std::map<uint32_t, std::vector<TreeNode *>> tobeVisited;
-  std::map<UINT32, qsym::ExprRef> protoCached;
 
-  void deserializeToQsymExpr(
+  std::set<const TreeNode *> fullVisitCache;
+  std::map<uint32_t, qsym::ExprRef> protoCached;
+
+  bool deserializeToQsymExpr(
       const pct::SymbolicExpr &protoExpr, qsym::ExprRef &qsymExpr, uint32_t *max_read);
-  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode);
+  TreeNode *updateTree(TreeNode *currNode, const PCTNode& pctNode, bool *isNew);
 
-  std::vector<qsym::ExprRef> getConstraints(const TreeNode *srcNode);
-
-  std::set<uint32_t> findReadIdx(qsym::ExprRef e);
-  bool isDeadNodeStrict(TreeNode *node);
-
-  bool isFullyBuilt(const TreeNode* node);
-  bool isFullyVisited(const TreeNode* node, uint32_t depth);
+  std::vector<qsym::ExprRef> getRelaConstraints(const TreeNode *srcNode);
+  std::vector<qsym::ExprRef> getDomConstraints(const TreeNode *srcNode);
 
   void printNodeWithIndent(const TreeNode* node, uint32_t depth);
   void printTree(const TreeNode* node, uint32_t depth,

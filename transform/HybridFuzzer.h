@@ -431,8 +431,7 @@ public:
   static fs::path copy_testcase(
       const fs::path& testcase,
       TestcaseDir& target_dir,
-      const fs::path& parent
-  ) {
+      const fs::path& parent) {
     auto parent_filename = parent.filename();
     if (parent_filename.empty()) {
       throw std::invalid_argument("The input file does not have a name");
@@ -452,8 +451,6 @@ public:
     std::string new_name(buffer);
 
     fs::path target = target_dir.path / new_name;
-
-//    std::cerr << "Creating test case " << target << std::endl;
 
     try {
       fs::copy_file(testcase, target, fs::copy_options::overwrite_existing);
@@ -571,9 +568,14 @@ public:
       solver_time_opt = total_us;
     }
 
+    fs::path pctFile = output_dir / "000001.pct";
+    if (!fs::exists(pctFile)){
+      std::cerr << "[PCT] Unable to open pct constraint file!\n";
+    }
+
     return SymCCResult{
         test_cases,
-        output_dir / "000001.pct",
+        pctFile,
         killed,
         total_us,
         solver_time_opt
@@ -708,8 +710,7 @@ public:
                      ExecutionTree *executionTree) {
     fs::path tmp_dir;
     {
-      const char* tmpdir_env = std::getenv("TMPDIR");
-      std::string tmp_base = tmpdir_env ? tmpdir_env : "/tmp";
+      std::string tmp_base = "/tmp";
       std::string pattern = fs::path(tmp_base) / "symcc-XXXXXX";
 
       std::vector<char> buffer(pattern.begin(), pattern.end());
@@ -730,19 +731,22 @@ public:
 
     uint64_t num_total = 0, num_interesting = 0;
 
-    process_new_testcase(input, input, tmp_dir, afl_config);
+    measure_coverage(input, tmp_dir, afl_config);
     SymCCResult symccRes = symcc.run(
         input, tmp_dir / "output", true);
     executionTree->updatePCTree(symccRes.constraint_file, input);
 
     std::cerr << "[PCT] SymCC executed testcases\n";
 
+    std::vector<fs::path> interestCases;
     for (const auto& new_test : symccRes.test_cases) {
-      auto res = process_new_testcase(new_test, input, tmp_dir, afl_config);
+      auto res = measure_coverage(new_test, tmp_dir, afl_config);
       num_total++;
-      if (res == TestcaseResult::New){
-        // collect all test_cases generated
-        num_interesting++;
+      if (res != TestcaseResult::Uninteresting){
+        interestCases.push_back(new_test);
+        num_interesting ++;
+
+        SymCC::copy_testcase(new_test, queue, input);
       }
     }
 
@@ -797,11 +801,9 @@ public:
     return true;
   }
 
-  bool run_pct_input(const fs::path& input,
-                     const SymCC& symcc,
-                     const AflConfig& afl_config,
-                     ExecutionTree *executionTree) {
-    bool isCovNew = false;
+  uint32_t run_pct_input(const std::vector<std::string> *inputs,
+                         const SymCC& symcc, const AflConfig& afl_config) {
+    uint32_t covNewCnt = 0;
     fs::path tmp_dir;
     {
       const char* tmpdir_env = std::getenv("TMPDIR");
@@ -825,24 +827,49 @@ public:
     };
 
     // current input from pct-solver may be covernew
-    auto res = process_new_testcase(input, input, tmp_dir, afl_config);
-    if (res == TestcaseResult::Uninteresting){
+    for (const auto& input : *inputs){
+      auto res = process_new_testcase(input, input, tmp_dir, afl_config);
+
       // delete useless output
       std::error_code ec;
       fs::remove(input, ec);
-    }else{
-      SymCCResult symccRes = symcc.run(
-          input, tmp_dir / "output", false);
-      executionTree->updatePCTree(symccRes.constraint_file, input);
-      stats.add_execution(symccRes);
-      isCovNew = true;
+
+      if (res != TestcaseResult::Uninteresting)
+        covNewCnt ++;
     }
 
     cleanup();
-    return isCovNew;
+    return covNewCnt;
   }
 
 private:
+  TestcaseResult measure_coverage(
+      const fs::path& testcase,
+      const fs::path& tmp_dir,
+      const AflConfig& afl_config){
+
+    auto bitmap_path = tmp_dir / "testcase_bitmap";
+    auto showmap_res = afl_config.run_showmap(bitmap_path, testcase);
+
+    switch (showmap_res.kind) {
+    case AflShowmapResultKind::Success: {
+      bool interesting = current_bitmap.merge(showmap_res.map);
+      if (interesting) {
+        return TestcaseResult::New;
+      }
+      return TestcaseResult::Uninteresting;
+    }
+    case AflShowmapResultKind::Hang:
+      std::cerr << "Ignoring new test case " << testcase << " because afl-showmap timed out\n";
+      return TestcaseResult::Hang;
+    case AflShowmapResultKind::Crash:
+      std::cerr << "Test case " << testcase << " crashes afl-showmap; probably interesting\n";
+      return TestcaseResult::Crash;
+    default:
+      return TestcaseResult::Uninteresting;
+    }
+  }
+
   TestcaseResult process_new_testcase(
       const fs::path& testcase,
       const fs::path& parent,

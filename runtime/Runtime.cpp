@@ -154,9 +154,8 @@ public:
 EnhancedQsymSolver *g_enhanced_solver;
 
 std::vector<BranchNode> branchConstaints;
-std::set<UINT32> visSiteID;
+std::set<uint32_t> branchHashes;
 std::map<UINT32, pct::SymbolicExpr> cached;
-std::set<UINT32> visBB;
 bool isReported = false;
 uint32_t currBBID;
 int signals[10]{SIGILL, SIGABRT, SIGFPE, SIGSEGV, SIGTERM}; // signal handling
@@ -335,17 +334,12 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
 
   if (g_config.useSolver)
     g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
-/*
-  if (branchConstaints.size() > 300)
-    return;
 
-  // if the constraint is same as prev, do not collect
-  if ( ! branchConstaints.empty() &&
-      constraint->hash() == branchConstaints.back().constraint->hash() &&
-      taken == branchConstaints.back().taken)
-    return;
-
-  branchConstaints.emplace_back(constraint, taken, currBBID);*/
+  BranchNode branchNode(constraint, taken, currBBID);
+  if (branchConstaints.size() < 200 && branchHashes.count(branchNode.hash) == 0){
+    branchHashes.insert(branchNode.hash);
+    branchConstaints.push_back(branchNode);
+  }
 }
 
 SymExpr _sym_get_input_byte(size_t offset, uint8_t value) {
@@ -441,7 +435,6 @@ void _sym_notify_ret(uintptr_t site_id) {
 void _sym_notify_basic_block(uintptr_t site_id) {
   g_call_stack_manager.visitBasicBlock(site_id);
   currBBID = site_id;
-  visBB.insert(site_id);
 }
 
 //
@@ -651,10 +644,6 @@ void _sym_report_path_constraint_sequence() {
 
   pct::ConstraintSequence cs;
 
-  for(uint32_t bb : visBB) {
-    cs.add_visbb(bb);
-  }
-
   for(const auto &bnode : branchConstaints) {
     pct::SequenceNode *node = cs.add_node();
     node->set_taken((bnode.taken > 0));
@@ -663,8 +652,6 @@ void _sym_report_path_constraint_sequence() {
     pct::SymbolicExpr *expr = node->mutable_constraint();
     *expr = serializeQsymExpr(bnode.constraint);
   }
-
-//  cs.set_varbytes(MaxVarIndex);
 
   std::string fname = g_config.outputDir + "/" + toString6digit(getTestCaseID()) + ".pct";
   ofstream of(fname, std::ofstream::out | std::ofstream::binary);
