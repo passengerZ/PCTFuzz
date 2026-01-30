@@ -275,10 +275,15 @@ ExprRef CommonSimplifyExprBuilder::createExtract(
     if (ee->kind() == ZExt
         && index >= ee->expr()->bits())
       return createConstant(0, bits);
+
+    if (ee->kind() == ZExt &&
+        index == 0 &&
+        ee->expr()->bits() < bits)
+      return createZExt(ee->expr(), bits);
   }
-  else if (auto ee = castAs<ExtractExpr>(e)) {
+  else if (auto ee2 = castAs<ExtractExpr>(e)) {
     // E(E(x, i1, b1), i2, b2) == E(x, i1 + i2, b2)
-    return createExtract(ee->expr(), ee->index() + index, bits);
+    return createExtract(ee2->expr(), ee2->index() + index, bits);
   }
 
   if (index == 0 && e->bits() == bits)
@@ -520,6 +525,19 @@ ExprRef ConstantFoldingExprBuilder::createEqual(ExprRef l, ExprRef r) {
   if (ce_l != NULL && ce_r != NULL) {
     QSYM_ASSERT(l->bits() == r->bits());
     return createBool(ce_l->value() == ce_r->value());
+  }
+
+  if (ce_l != NULL){
+    if(auto ite_r = castAs<IteExpr>(r)){
+      ConstantExprRef ite_true  = castAs<ConstantExpr>(ite_r->expr_true());
+      ConstantExprRef ite_false = castAs<ConstantExpr>(ite_r->expr_false());
+      if (ite_true != NULL && ite_true->value().eq(ce_l->value()))
+        return ite_r->expr_cond();
+      if (ite_false != NULL && ite_false->value().eq(ce_l->value()))
+        return createLNot(ite_r->expr_cond());
+      if (ite_true != NULL && ite_false != NULL)
+        return createBool(false);
+    }
   }
 
   BoolExprRef be0 = castAs<BoolExpr>(l);

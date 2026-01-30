@@ -49,38 +49,6 @@ z3::context *g_z3_context;
 SearchStrategy *g_searcher;
 ExecutionTree *executionTree;
 
-uint32_t solved_pct(std::vector<TreeNode *> *tobeExplores,
-                    State *state, SymCC *symcc, AflConfig* afl_config){
-  if (tobeExplores->empty())
-    return 0;
-
-  uint32_t solved = 0;
-  std::vector<std::string> validTestcases;
-  for (auto node : *tobeExplores){
-    std::cerr << "S|";
-    std::string testcase = executionTree->generateTestCase(node);
-    if (testcase.empty())
-      continue;
-
-    solved ++;
-    state->solved.current_id++;
-    validTestcases.push_back(testcase);
-  }
-  std::cerr << "\n";
-
-  uint32_t covNewCnt = state->run_pct_input(
-      &validTestcases, *symcc, *afl_config);
-
-  if (covNewCnt > 0 &&
-      executionTree->visBB.size() > (g_searcher->branchBB.size() >> 6))
-    executionTree->visBB.clear();
-
-  std::cerr << "\n[PCT] nodes: "<< tobeExplores->size()
-            << ", solved: " << solved
-            << ", covnew: " << covNewCnt << "\n";
-  return covNewCnt;
-}
-
 }
 // =============================================================================
 // Main
@@ -169,7 +137,7 @@ int main(int argc, char* argv[]) {
 
     std::vector<TreeNode *> willbeVisit =
         executionTree->selectDeepestNodes(32);
-    solved_pct(&willbeVisit, &state, &symcc, &afl_config);
+    state.run_pct_input(&willbeVisit, symcc, afl_config, executionTree);
 
 //    std::vector<TreeNode *> willbeVisit2 =
 //        executionTree->selectDFSNodes(&deadBB, 16);

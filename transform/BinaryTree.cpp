@@ -180,26 +180,34 @@ bool ExecutionTree::updatePCTree(
   bool isNew = false;
 
   qsym::ExprRef pathCons;
+  std::vector<qsym::ExprRef> constriants;
+
   TreeNode *currNode = getRoot();
   for (int i = 0; i < cs.node_size(); i++) {
     const pct::SequenceNode &pnode = cs.node(i);
-    if (!pnode.has_constraint())
-      continue;
+
+    if (!pnode.has_constraint()) continue;
 
     bool branchTaken = pnode.taken() > 0;
-
     bool success = deserializeToQsymExpr(
         pnode.constraint(), pathCons, &max_read);
+    if (!success) return isNew; // avoid protobuf deserialize error
 
-    // avoid protobuf deserialize error
-    if (!success) return isNew;
-
-    if (pathCons->isBool() || pathCons->isConstant())
-      continue;
-
+    if (pathCons->isBool() || pathCons->isConstant()) continue;
     g_searcher->updateVisBB(pnode.b_id());
 
+    qsym::ExprRef negativeCond =
+        branchTaken ? pathCons : g_expr_builder->createLNot(pathCons);
+
+//    g_solver->push();
+//    auto res = g_solver->check();
+//    g_solver->pop();
+//
+//    if (g_solver->check() == z3::unsat)
+//      continue;
+
     PCTNode pctNode(pathCons, input, branchTaken, pnode.b_id());
+
     auto idx = findReadIdx(pathCons);
     pctNode.idx.insert(idx.begin(), idx.end());
 
@@ -207,7 +215,6 @@ bool ExecutionTree::updatePCTree(
 //    std::cerr << "[zgf dbg] [" << i << "] " << branchTaken << " " << pnode.b_id()
 //              << " " << currNode->data.constraint->toString() << "\n";
   }
-
   return isNew;
 }
 
@@ -322,20 +329,9 @@ TreeNode *ExecutionTree::updateTree(
       for (TreeNode *left : currNode->lefts){
         if (left->data.currBB != pctNode.currBB) continue;
 
-        if (left->data.constraint->hash() == pctNode.constraint->hash() ||
-            left->isDiverse){
+        if (left->data.constraint->hash() == pctNode.constraint->hash()){
           nextNode = left;
           break;
-        }else{
-          auto leftReads = findReadIdx(left->data.constraint);
-          auto newReads  = findReadIdx(pctNode.constraint);
-
-          // read index are equal, but conditions are different
-          if (leftReads == newReads){
-            left->isDiverse = true;
-            nextNode = left;
-            break;
-          }
         }
       }
 
@@ -369,20 +365,9 @@ TreeNode *ExecutionTree::updateTree(
       for (TreeNode *right : currNode->rights){
         if (right->data.currBB != pctNode.currBB) continue;
 
-        if (right->data.constraint->hash() == pctNode.constraint->hash() ||
-            right->isDiverse){
+        if (right->data.constraint->hash() == pctNode.constraint->hash()){
           nextNode = right;
           break;
-        }else{
-          auto rightReads = findReadIdx(right->data.constraint);
-          auto newReads   = findReadIdx(pctNode.constraint);
-
-          // read index are equal, but conditions are different
-          if (rightReads == newReads){
-            right->isDiverse = true;
-            nextNode = right;
-            break;
-          }
         }
       }
 
@@ -393,7 +378,6 @@ TreeNode *ExecutionTree::updateTree(
         currNode->rights.push_back(newRight);
         nextNode = newRight;
       }
-
 
     } else {
       TreeNode *newRight = constructTreeNode(currNode, pctNode);
@@ -502,47 +486,70 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(
 
 std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
   bool clean = tobeVisited.size() > 10000;
-  uint32_t idx = 0;
-  for (auto it = tobeVisited.begin(); it != tobeVisited.end(); ) {
-    idx ++;
-    if ((*it)->status != WillbeVisit || (*it)->depth < 30 ||
-        (clean && idx % 3 == 0)) {
-      it = tobeVisited.erase(it); // erase 返回下一个有效迭代器
-    } else {
-      ++it;
-    }
-  }
-
-  std::vector<TreeNode*> validNodes;
-  for (auto node : tobeVisited){
-    if (visBB.count(node->data.currBB) == 0){
-      validNodes.push_back(node);
-      if (validNodes.size() >= N / 2)
-        break;
-    }
-  }
-
-  if (tobeVisited.size() <= N) return validNodes;
-
-  // 使用partial_sort：将前actualN个最大的（按depth降序）放到前面，并且这actualN个是降序排列的
-  std::partial_sort(
-      tobeVisited.begin(),
-      tobeVisited.begin() + N / 2,
-      tobeVisited.end(),
-      [](TreeNode* a, TreeNode* b) {
-        return a->depth > b->depth; // 降序：深度大的在前
+  if (clean){
+    for (auto it = tobeVisited.begin(); it != tobeVisited.end(); ) {
+      if ((*it)->status != WillbeVisit || (*it)->depth < 30) {
+        it = tobeVisited.erase(it); // erase 返回下一个有效迭代器
+      } else if ((*it)->status == WillbeVisit && fastUnsatCheck(*it)){
+        // use unsat cache to fliter
+        it = tobeVisited.erase(it);
+      } else {
+        ++it;
       }
-  );
+    }
+  }
 
-  validNodes.insert(
-      validNodes.end(),
-      tobeVisited.begin(),
-      tobeVisited.begin() + N / 2);
+  std::vector<TreeNode*> result;
+  if (tobeVisited.empty() || N == 0) return result;
 
-  for(auto node : validNodes)
-    visBB.insert(node->data.currBB);
+  const size_t size = tobeVisited.size();
 
-  return validNodes;
+  // ====== 2. 计算当前桶范围（向上取整确保全覆盖）======
+  size_t bucket_size = (size + 9) / 10; // 每桶最小大小
+  size_t start_idx = current_bucket * bucket_size;
+  size_t end_idx = std::min((current_bucket + 1) * bucket_size, size);
+
+  // 安全处理：桶索引超出范围时回绕（应对size动态变化）
+  if (start_idx >= size) {
+    current_bucket = 0; // 重置避免卡死
+    start_idx = 0;
+    end_idx = std::min(bucket_size, size);
+  }
+
+  // ====== 3. 桶内循环采样（避免总是取桶开头）======
+  std::set<uint32_t> local_visBB; // 本次调用BB去重
+  size_t bucket_offset = select_offset % (end_idx - start_idx + 1);
+  bool taken_enough = false;
+
+  for (size_t step = 0; step < (end_idx - start_idx) && result.size() < N; ++step) {
+    size_t idx = start_idx + (bucket_offset + step) % (end_idx - start_idx);
+    TreeNode* node = tobeVisited[idx];
+
+    if (node->status == WillbeVisit &&
+        local_visBB.find(node->data.currBB) == local_visBB.end() &&
+        !fastUnsatCheck(node)) {
+
+      result.push_back(node);
+      local_visBB.insert(node->data.currBB);
+
+      if (result.size() >= N) {
+        // 记录下次桶内起始偏移（实现桶内循环）
+        select_offset = (bucket_offset + step + 1) % (end_idx - start_idx + 1);
+        taken_enough = true;
+        break;
+      }
+    }
+  }
+
+  // 未取满时推进桶内偏移（避免下次从同位置开始）
+  if (!taken_enough && (end_idx > start_idx)) {
+    select_offset = (select_offset + 1) % (end_idx - start_idx + 1);
+  }
+
+  // ====== 4. 推进到下一个桶（核心：实现10%区间轮询）======
+  current_bucket = (current_bucket + 1) % 10;
+
+  return result;
 }
 
 std::vector<qsym::ExprRef> ExecutionTree::getRelaConstraints(

@@ -22,7 +22,7 @@ using namespace std::chrono;
 // ----------------------------
 // Constants
 // ----------------------------
-constexpr uint32_t TIMEOUT = 90; // seconds
+constexpr uint32_t TIMEOUT = 10; // seconds
 
 // ----------------------------
 // Utility Functions (already provided, but included for completeness)
@@ -296,7 +296,8 @@ public:
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(queue)) {
       if (entry.is_regular_file() &&
-          seen.find(entry.path()) == seen.end()) {
+          seen.find(entry.path()) == seen.end() &&
+          entry.path().filename().string().find("sync:symcc") == std::string::npos) {
         candidates.push_back(entry.path());
       }
     }
@@ -307,7 +308,6 @@ public:
                                       [](const fs::path& a, const fs::path& b) {
                                         return TestcaseScore::new_score(a) < TestcaseScore::new_score(b);
                                       });
-
     return best;
   }
 
@@ -730,22 +730,17 @@ public:
     };
 
     uint64_t num_total = 0, num_interesting = 0;
-
     measure_coverage(input, tmp_dir, afl_config);
+
     SymCCResult symccRes = symcc.run(
         input, tmp_dir / "output", true);
     executionTree->updatePCTree(symccRes.constraint_file, input);
 
-    std::cerr << "[PCT] SymCC executed testcases\n";
-
-    std::vector<fs::path> interestCases;
     for (const auto& new_test : symccRes.test_cases) {
-      auto res = measure_coverage(new_test, tmp_dir, afl_config);
+      auto symcc_res = measure_coverage(new_test, tmp_dir, afl_config);
       num_total++;
-      if (res != TestcaseResult::Uninteresting){
-        interestCases.push_back(new_test);
+      if (symcc_res != TestcaseResult::Uninteresting){
         num_interesting ++;
-
         SymCC::copy_testcase(new_test, queue, input);
       }
     }
@@ -761,6 +756,7 @@ public:
     processed_files.insert(input);
     stats.add_execution(symccRes);
     cleanup();
+
     return num_interesting > 0;
   }
 
@@ -801,9 +797,9 @@ public:
     return true;
   }
 
-  uint32_t run_pct_input(const std::vector<std::string> *inputs,
-                         const SymCC& symcc, const AflConfig& afl_config) {
-    uint32_t covNewCnt = 0;
+  uint32_t run_pct_input(std::vector<TreeNode *> *tobeExplores,
+                         const SymCC& symcc, const AflConfig& afl_config,
+                         ExecutionTree *executionTree) {
     fs::path tmp_dir;
     {
       const char* tmpdir_env = std::getenv("TMPDIR");
@@ -826,17 +822,33 @@ public:
       fs::remove_all(tmp_dir, ec);
     };
 
-    // current input from pct-solver may be covernew
-    for (const auto& input : *inputs){
-      auto res = process_new_testcase(input, input, tmp_dir, afl_config);
+    uint32_t covNewCnt = 0, solvedCnt = 0;
+
+    for (auto node : *tobeExplores){
+      std::string testcase = executionTree->generateTestCase(node);
+
+      auto idx = executionTree->findReadIdx(node->data.constraint);
+      if (testcase.empty()){
+        executionTree->unsatNode[node->data.currBB].insert(node->data.hash);
+        continue;
+      }
+
+      solvedCnt ++;
+      solved.current_id++;
+
+      auto res = process_new_testcase(testcase, testcase, tmp_dir, afl_config);
 
       // delete useless output
       std::error_code ec;
-      fs::remove(input, ec);
+      fs::remove(testcase, ec);
 
       if (res != TestcaseResult::Uninteresting)
         covNewCnt ++;
     }
+
+    std::cerr << "[PCT] nodes: "<< tobeExplores->size()
+              << ", solved: " << solvedCnt
+              << ", covnew: " << covNewCnt << "\n";
 
     cleanup();
     return covNewCnt;

@@ -44,8 +44,6 @@ public:
   NodeStatus status = WillbeVisit;
   uint32_t id = 0, depth = 0;
 
-  bool isDiverse = false;
-
   Node() : parent(NULL){
     parent = NULL;
   }
@@ -113,14 +111,28 @@ public:
   ~ExecutionTree() { delete root; }
   TreeNode *getRoot() const { return root; }
 
-  std::set<uint32_t> visBB;
   std::vector<TreeNode *> tobeVisited;
+
+  std::map<uint32_t, std::set<uint32_t>> unsatNode;
+
+  bool fastUnsatCheck(TreeNode *node){
+    bool isUnsat = false;
+    auto it2 = unsatNode.find(node->data.currBB);
+    if (it2 != unsatNode.end()){
+      if (it2->second.count(node->data.hash) != 0){
+        node->status = UnReachable;
+        isUnsat = true;
+      }
+    }
+    return isUnsat;
+  }
 
   bool updatePCTree(const fs::path &constraint_file, const fs::path &input);
 
   TreeNode *constructTreeNode(TreeNode *parent, PCTNode n) {
     TreeNode *newNode = new Node<PCTNode>(parent, std::move(n));
-    tobeVisited.push_back(newNode);
+    if (!fastUnsatCheck(newNode))
+      tobeVisited.push_back(newNode);
     return newNode;
   }
 
@@ -146,6 +158,7 @@ private:
   SearchStrategy *g_searcher;
 
   TreeNode *root;
+  size_t select_offset = 0, current_bucket = 0;
 
   std::set<const TreeNode *> fullVisitCache;
   std::map<uint32_t, qsym::ExprRef> protoCached;
