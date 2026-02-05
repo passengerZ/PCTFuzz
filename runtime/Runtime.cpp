@@ -154,7 +154,6 @@ public:
 EnhancedQsymSolver *g_enhanced_solver;
 
 std::vector<BranchNode> branchConstaints;
-std::set<uint32_t> branchHashes;
 std::map<UINT32, pct::SymbolicExpr> cached;
 bool isReported = false;
 uint32_t currBBID;
@@ -188,13 +187,13 @@ void _sym_initialize(void) {
   }
 
   // Check the output directory
-  if (!fs::exists(g_config.outputDir) ||
-      !fs::is_directory(g_config.outputDir)) {
-    std::cerr << "Error: the output directory " << g_config.outputDir
-              << " (configurable via SYMCC_OUTPUT_DIR) does not exist."
-              << std::endl;
-    exit(-1);
-  }
+//  if (!fs::exists(g_config.outputDir) ||
+//      !fs::is_directory(g_config.outputDir)) {
+//    std::cerr << "Error: the output directory " << g_config.outputDir
+//              << " (configurable via SYMCC_OUTPUT_DIR) does not exist."
+//              << std::endl;
+//    exit(-1);
+//  }
 
   g_z3_context = new z3::context{};
   g_enhanced_solver = new EnhancedQsymSolver{};
@@ -329,15 +328,42 @@ SymExpr _sym_build_trunc(SymExpr expr, uint8_t bits) {
 
 void _sym_push_path_constraint(SymExpr constraint, int taken,
                                uintptr_t site_id) {
+  if (g_config.silenceMode)
+    return;
+
   if (constraint == nullptr || constraint->isBool())
     return;
+
+  if(!constraint->isLogic()){
+    std::cerr << "[PCT] debug : " << constraint->toString() << "\n";
+    assert(false);
+  }
 
   if (g_config.useSolver)
     g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 
   BranchNode branchNode(constraint, taken, currBBID);
-  if (branchConstaints.size() < 200 && branchHashes.count(branchNode.hash) == 0){
-    branchHashes.insert(branchNode.hash);
+  if (branchConstaints.size() < 1000) {
+    // 1. 统计当前 currBBID 已存在的节点数
+    int count = 0;
+    for (const auto& bn : branchConstaints)
+      if (bn.currBB == currBBID) ++count;
+
+    // 2. 计算需删除数量：保留 5 个（push 后恰好 10 个）
+    int toDelete = (count >= 5) ? (count - 4) : 0;
+
+    // 3. 从前往后删除最早添加的 toDelete 个节点（即最旧的）
+    if (toDelete > 0) {
+      for (auto it = branchConstaints.begin();
+           it != branchConstaints.end() && toDelete > 0; ) {
+        if (it->currBB == currBBID) {
+          it = branchConstaints.erase(it);
+          --toDelete;
+        } else ++it;
+      }
+    }
+
+    // 4. 添加新节点（此时该 BB 节点数 = min(count, 9) + 1 ≤ 10）
     branchConstaints.push_back(branchNode);
   }
 }
@@ -638,7 +664,7 @@ void _sym_handle_exit(int val) {
 }
 
 void _sym_report_path_constraint_sequence() {
-  if (isReported)
+  if (isReported || g_config.silenceMode)
     return;
   isReported = true;
 

@@ -53,6 +53,12 @@ struct BranchNode {
   uint32_t hash = 0;
 };
 
+struct StackBranches{
+  StackBranches(uint32_t funcID) : funcID(funcID) {}
+  std::vector<BranchNode> branchNodes;
+  uint32_t funcID;
+};
+
 /*
  * Initialization
  */

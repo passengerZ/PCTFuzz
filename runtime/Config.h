@@ -69,6 +69,7 @@ struct Config {
 
   /// if we use solver when concolic execution
   bool useSolver = true;
+  bool silenceMode = false;
 };
 
 /// The global configuration object.

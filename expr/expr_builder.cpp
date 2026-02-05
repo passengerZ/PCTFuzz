@@ -298,6 +298,8 @@ ExprRef CommonSimplifyExprBuilder::createZExt(
     return createExtract(e, 0, bits);
   if (e->bits() == bits)
     return e;
+  if (e->kind() == ZExt && bits > e->bits())
+    return ExprBuilder::createZExt(e->getChild(0), bits);
   return ExprBuilder::createZExt(e, bits);
 }
 

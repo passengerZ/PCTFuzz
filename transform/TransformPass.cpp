@@ -313,13 +313,6 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
       getCurrentBlock().get(), "srand((uint8_t)time(NULL));");
   getCurrentBlock()->statements.push_back(srandStmt);
 
-  std::string forStr = "for(int i=0; i<" +
-                       std::to_string(deadZones->size())
-                       + "; i++){";
-  auto forBeginStmt = std::make_shared<CXXGenericStatement>(
-      getCurrentBlock().get(), forStr);
-  getCurrentBlock()->statements.push_back(forBeginStmt);
-
   uint32_t g_read_idx = 0, curr_read_max = 0;
 
   // Generate constraint branches
@@ -446,13 +439,6 @@ bool TransformPass::buildEvaluator(ExecutionTree *executionTree,
   }
 
   insertFuzzingTarget(fuzzFn->defn);
-
-  auto forEndStmt = std::make_shared<CXXGenericStatement>(
-      getCurrentBlock().get(), "}");
-  auto returnStmt = std::make_shared<CXXGenericStatement>(
-      getCurrentBlock().get(), "return 0;");
-  getCurrentBlock()->statements.push_back(forEndStmt);
-  getCurrentBlock()->statements.push_back(returnStmt);
 
 //  program->print(llvm::errs());
 //  llvm::errs() << "========\n";

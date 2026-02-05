@@ -28,7 +28,7 @@ public:
 
     g_entry = allCFGs["main"].entryBBAddr;
     collectAllRelevantBBs();
-    computeFullDominators();
+    //computeFullDominators();
   }
 
   std::map<std::string, FunctionCFG> allCFGs;
@@ -43,7 +43,7 @@ public:
 
     std::vector<std::string> cfgFiles = getCFGFiles(CFGPath);
 
-    for (auto cfgFile : cfgFiles){
+    for (const auto& cfgFile : cfgFiles){
       std::ifstream file(cfgFile);
       if (!file.is_open()) {
         throw std::runtime_error("Failed to open CFG JSON file: " + cfgFile);
@@ -280,6 +280,122 @@ public:
     }
 
     return order;
+  }
+
+  // 辅助：获取从 g_entry 到 target 的所有可达基本块（正向 BFS）
+  std::set<uint32_t> getReachableSubgraph(uint32_t target) {
+    std::set<uint32_t> reachable;
+    if (releBB.find(target) == releBB.end()) return reachable;
+
+    std::queue<uint32_t> q;
+    q.push(g_entry);
+    reachable.insert(g_entry);
+
+    while (!q.empty()) {
+      uint32_t node = q.front(); q.pop();
+      // 假设你有正向 ICFG: std::unordered_map<uint32_t, std::vector<uint32_t>> ICFG;
+      auto it = ICFG.find(node);
+      if (it != ICFG.end()) {
+        for (uint32_t succ : it->second) {
+          if (releBB.count(succ) && reachable.insert(succ).second) {
+            if (succ != target) // 可提前终止？不，需完整子图
+              q.push(succ);
+          }
+        }
+      }
+    }
+    return reachable;
+  }
+
+// 按需计算 target 的支配者集合
+  std::set<uint32_t> computeDominatorsFor(uint32_t target) {
+    if (revDominate.find(target) != revDominate.end())
+      return revDominate[target];
+
+    // 1. 获取从入口到 target 的可达子图
+    std::set<uint32_t> subgraph = getReachableSubgraph(target);
+    if (subgraph.empty() || subgraph.count(target) == 0) {
+      // 不可达，返回空或仅自身？
+      return {target}; // 或 throw
+    }
+
+    // 2. 初始化支配集
+    std::unordered_map<uint32_t, std::set<uint32_t>> dom;
+    for (uint32_t node : subgraph) {
+      if (node == g_entry) {
+        dom[node] = {g_entry};
+      } else {
+        dom[node] = subgraph; // 初始化为全子图
+      }
+    }
+
+    // 3. 构建子图的前驱关系（从 revICFG 提取）
+    std::unordered_map<uint32_t, std::vector<uint32_t>> subPred;
+    for (uint32_t node : subgraph) {
+      auto it = revICFG.find(node);
+      if (it != revICFG.end()) {
+        for (uint32_t pred : it->second) {
+          if (subgraph.count(pred)) {
+            subPred[node].push_back(pred);
+          }
+        }
+      }
+    }
+
+    // 4. 迭代直到收敛（只在子图上）
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      // 遍历顺序：BFS 从入口开始（保证前驱先更新）
+      std::queue<uint32_t> q;
+      std::unordered_set<uint32_t> visited;
+      q.push(g_entry);
+      visited.insert(g_entry);
+
+      while (!q.empty()) {
+        uint32_t node = q.front(); q.pop();
+        if (node == g_entry) continue;
+
+        // 计算所有前驱支配集的交集
+        std::set<uint32_t> intersection;
+        bool first = true;
+        for (uint32_t pred : subPred[node]) {
+          if (first) {
+            intersection = dom[pred];
+            first = false;
+          } else {
+            std::set<uint32_t> temp;
+            std::set_intersection(
+                intersection.begin(), intersection.end(),
+                dom[pred].begin(), dom[pred].end(),
+                std::inserter(temp, temp.begin())
+            );
+            intersection = std::move(temp);
+          }
+        }
+
+        if (first) continue; // 无有效前驱（不应发生）
+
+        intersection.insert(node); // 支配集包含自身
+
+        if (dom[node] != intersection) {
+          dom[node] = std::move(intersection);
+          changed = true;
+        }
+
+        // 继续 BFS
+        auto succIt = ICFG.find(node);
+        if (succIt != ICFG.end()) {
+          for (uint32_t succ : succIt->second) {
+            if (subgraph.count(succ) && visited.insert(succ).second) {
+              q.push(succ);
+            }
+          }
+        }
+      }
+    }
+    revDominate[target] = dom[target];
+    return dom[target];
   }
 
 

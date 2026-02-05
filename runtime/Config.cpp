@@ -44,8 +44,11 @@ Config g_config;
 
 void loadConfig() {
   auto *outputDir = getenv("SYMCC_OUTPUT_DIR");
-  if (outputDir != nullptr)
+  if (outputDir != nullptr){
     g_config.outputDir = outputDir;
+  }else{
+    g_config.silenceMode = true;
+  }
 
   auto *inputFile = getenv("SYMCC_INPUT_FILE");
   if (inputFile != nullptr)

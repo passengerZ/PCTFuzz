@@ -47,6 +47,35 @@ std::string get_origin_id(const fs::path& testcase){
   return filename.substr(3, 6);
 }
 
+// FNV-1a 64-bit 哈希常量
+constexpr uint64_t FNV_OFFSET_BASIS = 14695981039346656037ULL;
+constexpr uint64_t FNV_PRIME = 1099511628211ULL;
+
+uint64_t fnv1a_hash(const unsigned char* data, size_t len, uint64_t hash = FNV_OFFSET_BASIS) {
+  for (size_t i = 0; i < len; ++i) {
+    hash ^= data[i];
+    hash *= FNV_PRIME;
+  }
+  return hash;
+}
+
+uint64_t getFileHash(const std::string& filepath) {
+  std::ifstream file(filepath, std::ios::binary);
+  if (!file) {
+    throw std::runtime_error("Cannot open file: " + filepath);
+  }
+
+  uint64_t hash = FNV_OFFSET_BASIS;
+  const size_t bufferSize = 8192;
+  std::string buffer(bufferSize, '\0');
+
+  while (file.read(&buffer[0], bufferSize) || file.gcount() > 0) {
+    size_t n = static_cast<size_t>(file.gcount());
+    hash = fnv1a_hash(reinterpret_cast<const unsigned char*>(buffer.data()), n, hash);
+  }
+  return hash;
+}
+
 std::vector<std::string> insert_input_file(const std::vector<std::string>& command,
                                            const fs::path& input_file) {
   std::vector<std::string> fixed = command;
@@ -258,7 +287,6 @@ public:
     bool use_stdin = std::find(target_cmd.begin(), target_cmd.end(), "@@") == target_cmd.end();
     bool qemu_mode = std::find(tokens.begin(), tokens.end(), "-Q") != tokens.end();
 
-
     return AflConfig{
         afl_binary_dir / "afl-showmap",
         target_cmd,
@@ -268,19 +296,8 @@ public:
     };
   }
 
-  std::vector<fs::path> get_all_seeds(fs::path &dir) const {
-    std::vector<fs::path> candidates;
-    for (const auto& entry : fs::directory_iterator(dir)) {
-      if (entry.is_regular_file() &&
-          starts_with(entry.path().filename().string(), "id:0")) {
-        candidates.push_back(entry.path());
-      }
-    }
-    return candidates;
-  }
-
   std::vector<fs::path> get_unvis_seeds(
-      fs::path &dir, const std::set<fs::path>& seen) const {
+      fs::path &dir, const std::set<fs::path>& seen) {
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(dir)) {
       if (entry.is_regular_file() &&
@@ -292,13 +309,19 @@ public:
     return candidates;
   }
 
-  std::optional<fs::path> best_new_testcase(const std::set<fs::path>& seen) {
+  std::optional<fs::path> best_new_testcase(
+      const std::set<fs::path>& seen, std::set<uint64_t> &fileHashes) {
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(queue)) {
       if (entry.is_regular_file() &&
           seen.find(entry.path()) == seen.end() &&
           entry.path().filename().string().find("sync:symcc") == std::string::npos) {
-        candidates.push_back(entry.path());
+        uint64_t fileHash = getFileHash(entry.path().string());
+
+        if (fileHashes.count(fileHash) == 0){
+          fileHashes.insert(fileHash);
+          candidates.push_back(entry.path());
+        }
       }
     }
 
@@ -555,11 +578,9 @@ public:
     // Collect test cases
     std::vector<fs::path> test_cases;
     if (fs::exists(output_dir)) {
-      for (const auto& entry : fs::directory_iterator(output_dir)) {
-        if (entry.is_regular_file()) {
+      for (const auto& entry : fs::directory_iterator(output_dir))
+        if (entry.is_regular_file() && entry.path().extension() != ".pct")
           test_cases.push_back(entry.path());
-        }
-      }
     }
 
     auto solver_time_opt = parse_solver_time(stderr_output);
@@ -686,6 +707,7 @@ public:
   steady_clock::time_point last_stats_output = steady_clock::now();
   std::ofstream stats_file;
   fs::path evaluator_file;
+  std::set<uint64_t> fileHashes;
 
   static State initialize(const fs::path& output_dir) {
     fs::create_directory(output_dir);
@@ -700,7 +722,8 @@ public:
         .solved     = TestcaseDir{output_dir / "solved"},
         .stats      = {},
         .stats_file = std::ofstream{output_dir / "stats"},
-        .evaluator_file = output_dir / "pct-evaluator.c"
+        .evaluator_file = output_dir / "pct-evaluator.c",
+        .fileHashes = {}
     };
   }
 
@@ -730,10 +753,12 @@ public:
     };
 
     uint64_t num_total = 0, num_interesting = 0;
-    measure_coverage(input, tmp_dir, afl_config);
+
+    auto afl_res = measure_coverage(input, tmp_dir, afl_config);
+    bool isInterest = afl_res != TestcaseResult::Uninteresting;
 
     SymCCResult symccRes = symcc.run(
-        input, tmp_dir / "output", true);
+        input, tmp_dir / "output", isInterest);
     executionTree->updatePCTree(symccRes.constraint_file, input);
 
     for (const auto& new_test : symccRes.test_cases) {
@@ -825,11 +850,13 @@ public:
     uint32_t covNewCnt = 0, solvedCnt = 0;
 
     for (auto node : *tobeExplores){
-      std::string testcase = executionTree->generateTestCase(node);
+      uint32_t domSize = 0;
+      std::string testcase = executionTree->generateTestCase(node, &domSize);
 
-      auto idx = executionTree->findReadIdx(node->data.constraint);
       if (testcase.empty()){
         executionTree->unsatNode[node->data.currBB].insert(node->data.hash);
+        if (domSize == 1)
+          executionTree->unsatCondtions.insert(node->data.hash);
         continue;
       }
 
@@ -842,8 +869,13 @@ public:
       std::error_code ec;
       fs::remove(testcase, ec);
 
-      if (res != TestcaseResult::Uninteresting)
+      if (res != TestcaseResult::Uninteresting){
         covNewCnt ++;
+      }
+//      std::cerr << node->depth << " " << node->data.currBB
+//                << " " << node->data.taken << node->data.hash
+//                << " " << node->data.constraint->toString() << "\n";
+
     }
 
     std::cerr << "[PCT] nodes: "<< tobeExplores->size()
@@ -851,6 +883,14 @@ public:
               << ", covnew: " << covNewCnt << "\n";
 
     cleanup();
+
+    if (covNewCnt == 0){
+      // 推进到下一个桶（实现10%区间轮询）
+      executionTree->current_bucket = (executionTree->current_bucket + 1) % 8;
+    }else{
+      executionTree->local_visBB.clear();
+    }
+
     return covNewCnt;
   }
 

@@ -114,9 +114,15 @@ public:
   std::vector<TreeNode *> tobeVisited;
 
   std::map<uint32_t, std::set<uint32_t>> unsatNode;
+  std::set<uint32_t> unsatCondtions;
+  size_t current_bucket = 0;
+  std::set<uint32_t> local_visBB;
 
   bool fastUnsatCheck(TreeNode *node){
     bool isUnsat = false;
+    if (unsatCondtions.count(node->data.hash))
+      return true;
+
     auto it2 = unsatNode.find(node->data.currBB);
     if (it2 != unsatNode.end()){
       if (it2->second.count(node->data.hash) != 0){
@@ -143,7 +149,7 @@ public:
 
   std::set<uint32_t> findReadIdx(qsym::ExprRef e);
 
-  std::string generateTestCase(TreeNode *node);
+  std::string generateTestCase(TreeNode *node, uint32_t *domSize);
   std::vector<std::vector<uint8_t>> sampleDeadValues(
       const DeadZone *zone, const std::set<uint32_t>& index, uint32_t N);
 
@@ -158,7 +164,7 @@ private:
   SearchStrategy *g_searcher;
 
   TreeNode *root;
-  size_t select_offset = 0, current_bucket = 0;
+  size_t select_offset = 0;
 
   std::set<const TreeNode *> fullVisitCache;
   std::map<uint32_t, qsym::ExprRef> protoCached;

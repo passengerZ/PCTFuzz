@@ -241,7 +241,7 @@ bool ExecutionTree::isFullyVisited(const TreeNode* node) {
     return true;
 
   if (node->isLeaf()) {
-    if (node->depth >= 200) // reach the max constraints
+    if (node->depth >= 300) // reach the max constraints
       return false;
 
     if (node->status == HasVisited)
@@ -435,7 +435,7 @@ std::vector<TreeNode *> ExecutionTree::selectDeadNode() {
     TreeNode* node = worklist.front();
     worklist.pop();
 
-    if (node->depth > 50)
+    if (node->depth > 30)
       continue;
 
     if (node != root && isFullyVisited(node)){
@@ -485,10 +485,10 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(
 }
 
 std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
-  bool clean = tobeVisited.size() > 10000;
+  bool clean = current_bucket == 0;
   if (clean){
     for (auto it = tobeVisited.begin(); it != tobeVisited.end(); ) {
-      if ((*it)->status != WillbeVisit || (*it)->depth < 30) {
+      if ((*it)->status != WillbeVisit) {
         it = tobeVisited.erase(it); // erase 返回下一个有效迭代器
       } else if ((*it)->status == WillbeVisit && fastUnsatCheck(*it)){
         // use unsat cache to fliter
@@ -505,7 +505,7 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
   const size_t size = tobeVisited.size();
 
   // ====== 2. 计算当前桶范围（向上取整确保全覆盖）======
-  size_t bucket_size = (size + 9) / 10; // 每桶最小大小
+  size_t bucket_size = ((size + 9) / N) << 2; // 每桶最小大小
   size_t start_idx = current_bucket * bucket_size;
   size_t end_idx = std::min((current_bucket + 1) * bucket_size, size);
 
@@ -517,7 +517,6 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
   }
 
   // ====== 3. 桶内循环采样（避免总是取桶开头）======
-  std::set<uint32_t> local_visBB; // 本次调用BB去重
   size_t bucket_offset = select_offset % (end_idx - start_idx + 1);
   bool taken_enough = false;
 
@@ -533,7 +532,7 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
       local_visBB.insert(node->data.currBB);
 
       if (result.size() >= N) {
-        // 记录下次桶内起始偏移（实现桶内循环）
+        // 记录下次桶内起始偏移
         select_offset = (bucket_offset + step + 1) % (end_idx - start_idx + 1);
         taken_enough = true;
         break;
@@ -543,11 +542,14 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
 
   // 未取满时推进桶内偏移（避免下次从同位置开始）
   if (!taken_enough && (end_idx > start_idx)) {
-    select_offset = (select_offset + 1) % (end_idx - start_idx + 1);
+    select_offset  = (select_offset + 1) % (end_idx - start_idx + 1);
+    // 推进到下一个桶（核心：实现N%区间轮询）
+    current_bucket = (current_bucket + 1) % N;
+    local_visBB.clear();
   }
 
   // ====== 4. 推进到下一个桶（核心：实现10%区间轮询）======
-  current_bucket = (current_bucket + 1) % 10;
+//  current_bucket = (current_bucket + 1) % 10;
 
   return result;
 }
@@ -580,7 +582,7 @@ std::vector<qsym::ExprRef> ExecutionTree::getDomConstraints(
 //    lastCond = g_expr_builder->createLNot(lastCond);
 
   qsym::ExprRef lastCond;
-  std::set<uint32_t> domBB = g_searcher->revDominate[srcNode->data.currBB];
+  std::set<uint32_t> domBB = g_searcher->computeDominatorsFor(srcNode->data.currBB);
   std::set<uint32_t> idx(srcNode->data.idx);
   uint32_t srcBBID = srcNode->data.currBB;
 
@@ -620,7 +622,12 @@ std::vector<qsym::ExprRef> ExecutionTree::getDomConstraints(
   return andConds;
 }
 
-std::string ExecutionTree::generateTestCase(TreeNode *node){
+std::string ExecutionTree::generateTestCase(TreeNode *node, uint32_t *domSize){
+
+//  std::cerr << node->depth << " " << node->data.currBB
+//            << " " << node->data.taken << node->data.hash
+//            << " " << node->data.constraint->toString() << "\n";
+
   fs::path input = node->data.input_file;
   std::vector<qsym::ExprRef> constraints = getRelaConstraints(node);
 
@@ -631,6 +638,8 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
 
   std::string new_case = g_solver->fetchTestcase();
   g_solver->pop();
+
+//  std::cerr << "[zgf dbg] rela " << (new_case.empty() ? "UNSAT " : "SAT ") << constraints.size() << "\n";
 
   // No Solution, set the node status to UNSAT
   // SAT, record the testcase,
@@ -649,6 +658,10 @@ std::string ExecutionTree::generateTestCase(TreeNode *node){
 
   new_case = g_solver->fetchTestcase();
   g_solver->pop();
+
+//  std::cerr << "[zgf dbg] dom " << (new_case.empty() ? "UNSAT " : "SAT ") << constraints.size() << "\n";
+
+  *domSize = constraints.size();
 
   return new_case;
 }

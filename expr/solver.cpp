@@ -313,12 +313,12 @@ void Solver::checkOutDir() {
     return;
   }
 
-  struct stat info;
-  if (stat(out_dir_.c_str(), &info) != 0
-      || !(info.st_mode & S_IFDIR)) {
-    LOG_FATAL("No such directory\n");
-    exit(-1);
-  }
+//  struct stat info;
+//  if (stat(out_dir_.c_str(), &info) != 0
+//      || !(info.st_mode & S_IFDIR)) {
+//    LOG_FATAL("No such directory\n");
+//    exit(-1);
+//  }
 }
 
 void Solver::readInput() {

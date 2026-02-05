@@ -173,6 +173,10 @@ class Expr : public DependencyNode {
       return kind_ == Bool;
     }
 
+    bool isLogic() const {
+      return Equal <= kind_ && kind_ <= LNot;
+    }
+
     bool isZero() const;
     bool isAllOnes() const;
     bool isOne() const;

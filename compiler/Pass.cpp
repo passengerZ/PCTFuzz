@@ -126,9 +126,10 @@ bool instrumentModule(Module &M) {
 
   CFGPath = getenv("PCT_CFG_PATH");
   if (CFGPath == nullptr) {
-    llvm_unreachable("[PCT] Not set PCT_CFG_PATH, do not generate CFG!\n");
+    llvm::errs() << "[PCT] Not set PCT_CFG_PATH, do not generate CFG!\n";
+  }else{
+    llvm::errs() << "[PCT] dump CFG in PCT_CFG_PATH : " << CFGPath << "\n";
   }
-  llvm::errs() << "[PCT] dump CFG in PCT_CFG_PATH : " << CFGPath << "\n";
 
   // Redirect calls to external functions to the corresponding wrappers and
   // rename internal functions.
@@ -235,6 +236,9 @@ void liftInlineAssembly(CallInst *CI) {
 }
 
 bool instrumentFunction(Function &F) {
+  if (!F.hasName())
+    return false;
+
   auto functionName = F.getName();
   if (functionName == kSymCtorName)
     return false;
@@ -308,8 +312,11 @@ bool instrumentFunction(Function &F) {
   assert(!verifyFunction(F, &errs()) &&
          "SymbolizePass produced invalid bitcode");
 
-  std::string FuncCFG = std::string(CFGPath) + "/" + cfg.funcName + ".cfg";
-  genCFGJsonFile(FuncCFG, &cfg);
+  if (CFGPath != nullptr){
+    std::string FuncCFG = std::string(CFGPath) + "/" + cfg.funcName + ".cfg";
+    genCFGJsonFile(FuncCFG, &cfg);
+  }
+
   return true;
 }
 
