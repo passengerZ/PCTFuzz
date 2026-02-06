@@ -435,11 +435,21 @@ std::vector<TreeNode *> ExecutionTree::selectDeadNode() {
     TreeNode* node = worklist.front();
     worklist.pop();
 
-    if (node->depth > 30)
+    if (node->depth > 50)
       continue;
 
     if (node != root && isFullyVisited(node)){
-      deadNode.push_back(node);
+      bool isEqual = node->data.constraint->kind() == qsym::Equal &&
+                     node->data.taken;
+
+      auto idx = findReadIdx(node->data.constraint);
+      bool isInbound = true;
+      for (auto id : idx)
+        if (id > 100) isInbound = false;
+
+      // do not check out bound constrinats
+      if (!isEqual && isInbound)
+        deadNode.push_back(node);
       continue;
     }
 
@@ -485,19 +495,8 @@ std::vector<TreeNode *> ExecutionTree::selectWillBeVisitedNodes(
 }
 
 std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
-  bool clean = current_bucket == 0;
-  if (clean){
-    for (auto it = tobeVisited.begin(); it != tobeVisited.end(); ) {
-      if ((*it)->status != WillbeVisit) {
-        it = tobeVisited.erase(it); // erase 返回下一个有效迭代器
-      } else if ((*it)->status == WillbeVisit && fastUnsatCheck(*it)){
-        // use unsat cache to fliter
-        it = tobeVisited.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
+  if (current_bucket == 0)
+    cleanTobeVisited();
 
   std::vector<TreeNode*> result;
   if (tobeVisited.empty() || N == 0) return result;
@@ -505,7 +504,7 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
   const size_t size = tobeVisited.size();
 
   // ====== 2. 计算当前桶范围（向上取整确保全覆盖）======
-  size_t bucket_size = ((size + 9) / N) << 2; // 每桶最小大小
+  size_t bucket_size = ((size + 9) / 10) << 2; // 每桶最小大小
   size_t start_idx = current_bucket * bucket_size;
   size_t end_idx = std::min((current_bucket + 1) * bucket_size, size);
 
@@ -517,23 +516,23 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
   }
 
   // ====== 3. 桶内循环采样（避免总是取桶开头）======
-  size_t bucket_offset = select_offset % (end_idx - start_idx + 1);
+  size_t len = end_idx - start_idx;
+  size_t bucket_offset = select_offset % (len + 1);
   bool taken_enough = false;
 
-  for (size_t step = 0; step < (end_idx - start_idx) && result.size() < N; ++step) {
-    size_t idx = start_idx + (bucket_offset + step) % (end_idx - start_idx);
+  for (size_t step = 0; step < size - start_idx && result.size() < N; ++step) {
+    size_t idx = start_idx + (bucket_offset + step) % len;
+    if (idx >= size) break;
     TreeNode* node = tobeVisited[idx];
 
     if (node->status == WillbeVisit &&
-        local_visBB.find(node->data.currBB) == local_visBB.end() &&
         !fastUnsatCheck(node)) {
 
       result.push_back(node);
-      local_visBB.insert(node->data.currBB);
 
       if (result.size() >= N) {
         // 记录下次桶内起始偏移
-        select_offset = (bucket_offset + step + 1) % (end_idx - start_idx + 1);
+        select_offset = (bucket_offset + step + 1) % (len + 1);
         taken_enough = true;
         break;
       }
@@ -542,10 +541,9 @@ std::vector<TreeNode *> ExecutionTree::selectDeepestNodes(uint32_t N) {
 
   // 未取满时推进桶内偏移（避免下次从同位置开始）
   if (!taken_enough && (end_idx > start_idx)) {
-    select_offset  = (select_offset + 1) % (end_idx - start_idx + 1);
+    select_offset  = (select_offset + 1) % (len + 1);
     // 推进到下一个桶（核心：实现N%区间轮询）
-    current_bucket = (current_bucket + 1) % N;
-    local_visBB.clear();
+    current_bucket = (current_bucket + 1) % 10;
   }
 
   // ====== 4. 推进到下一个桶（核心：实现10%区间轮询）======
@@ -563,8 +561,9 @@ std::vector<qsym::ExprRef> ExecutionTree::getRelaConstraints(
   while (currNode != getRoot()) {
     // do not collect unrelative constraints
     if (has_intersection(idx, currNode->data.idx)){
-      qsym::ExprRef expr = currNode->data.constraint;
+      idx.insert(currNode->data.idx.begin(), currNode->data.idx.end());
 
+      qsym::ExprRef expr = currNode->data.constraint;
       if (!currNode->data.taken)
         expr = g_expr_builder->createLNot(expr);
       constraints.push_back(expr);
@@ -586,17 +585,17 @@ std::vector<qsym::ExprRef> ExecutionTree::getDomConstraints(
   std::set<uint32_t> idx(srcNode->data.idx);
   uint32_t srcBBID = srcNode->data.currBB;
 
+  // optimal solving
+  if (domBB.empty()){
+    qsym::ExprRef expr = srcNode->data.constraint;
+    if (!srcNode->data.taken)
+      expr = g_expr_builder->createLNot(expr);
+    andConds.push_back(expr);
+    return andConds;
+  }
+
   auto currNode = srcNode;
   while (currNode != root) {
-    if (domBB.empty()){
-      qsym::ExprRef expr = currNode->data.constraint;
-      if (!currNode->data.taken)
-        expr = g_expr_builder->createLNot(expr);
-      andConds.push_back(expr);
-
-      break;
-    }
-
     // only collect dominate constraints
     if (domBB.count(currNode->data.currBB)){
       qsym::ExprRef expr = currNode->data.constraint;

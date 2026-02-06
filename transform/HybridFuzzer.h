@@ -22,7 +22,7 @@ using namespace std::chrono;
 // ----------------------------
 // Constants
 // ----------------------------
-constexpr uint32_t TIMEOUT = 10; // seconds
+constexpr uint32_t TIMEOUT = 20; // seconds
 
 // ----------------------------
 // Utility Functions (already provided, but included for completeness)
@@ -316,12 +316,12 @@ public:
       if (entry.is_regular_file() &&
           seen.find(entry.path()) == seen.end() &&
           entry.path().filename().string().find("sync:symcc") == std::string::npos) {
-        uint64_t fileHash = getFileHash(entry.path().string());
-
-        if (fileHashes.count(fileHash) == 0){
-          fileHashes.insert(fileHash);
+//        uint64_t fileHash = getFileHash(entry.path().string());
+//
+//        if (fileHashes.count(fileHash) == 0){
+//          fileHashes.insert(fileHash);
           candidates.push_back(entry.path());
-        }
+//        }
       }
     }
 
@@ -493,7 +493,7 @@ public:
     fs::copy_file(input, input_file, fs::copy_options::overwrite_existing);
     fs::create_directories(output_dir);
 
-    std::vector<std::string> args = {"timeout", "-k", "5", std::to_string(TIMEOUT)};
+    std::vector<std::string> args = {"timeout", "-k", "10", std::to_string(TIMEOUT)};
     args.insert(args.end(), command.begin(), command.end());
 
     setenv("SYMCC_ENABLE_LINEARIZATION", "1", 1);
@@ -886,9 +886,7 @@ public:
 
     if (covNewCnt == 0){
       // 推进到下一个桶（实现10%区间轮询）
-      executionTree->current_bucket = (executionTree->current_bucket + 1) % 8;
-    }else{
-      executionTree->local_visBB.clear();
+      executionTree->current_bucket = (executionTree->current_bucket + 1) % 10;
     }
 
     return covNewCnt;

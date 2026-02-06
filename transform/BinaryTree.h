@@ -116,7 +116,6 @@ public:
   std::map<uint32_t, std::set<uint32_t>> unsatNode;
   std::set<uint32_t> unsatCondtions;
   size_t current_bucket = 0;
-  std::set<uint32_t> local_visBB;
 
   bool fastUnsatCheck(TreeNode *node){
     bool isUnsat = false;
@@ -140,6 +139,15 @@ public:
     if (!fastUnsatCheck(newNode))
       tobeVisited.push_back(newNode);
     return newNode;
+  }
+
+  void cleanTobeVisited(){
+    for (auto it = tobeVisited.begin(); it != tobeVisited.end(); ) {
+      if ((*it)->status != WillbeVisit ||
+          ((*it)->status == WillbeVisit && fastUnsatCheck(*it))) {
+        it = tobeVisited.erase(it);
+      } else ++it;
+    }
   }
 
   // Export all visited leaf nodes with a depth within N

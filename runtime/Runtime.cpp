@@ -331,31 +331,31 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
   if (g_config.silenceMode)
     return;
 
-  if (constraint == nullptr || constraint->isBool())
+  if (constraint == nullptr || constraint->isBool() || constraint->isConstant())
     return;
 
   if(!constraint->isLogic()){
-    std::cerr << "[PCT] debug : " << constraint->toString() << "\n";
-    assert(false);
+    constraint = registerExpression(
+        g_expr_builder->bitToBool(allocatedExpressions.at(constraint)));
   }
 
   if (g_config.useSolver)
     g_solver->addJcc(allocatedExpressions.at(constraint), taken != 0, site_id);
 
   BranchNode branchNode(constraint, taken, currBBID);
-  if (branchConstaints.size() < 1000) {
+  if (branchConstaints.size() < 300) {
     // 1. 统计当前 currBBID 已存在的节点数
     int count = 0;
     for (const auto& bn : branchConstaints)
       if (bn.currBB == currBBID) ++count;
 
-    // 2. 计算需删除数量：保留 5 个（push 后恰好 10 个）
-    int toDelete = (count >= 5) ? (count - 4) : 0;
+    // 2. 计算需删除数量：保留 8 个
+    int toDelete = (count >= 8) ? (count - 7) : 0;
 
     // 3. 从前往后删除最早添加的 toDelete 个节点（即最旧的）
     if (toDelete > 0) {
       for (auto it = branchConstaints.begin();
-           it != branchConstaints.end() && toDelete > 0; ) {
+           it != branchConstaints.end() && toDelete > 0;) {
         if (it->currBB == currBBID) {
           it = branchConstaints.erase(it);
           --toDelete;
@@ -363,7 +363,7 @@ void _sym_push_path_constraint(SymExpr constraint, int taken,
       }
     }
 
-    // 4. 添加新节点（此时该 BB 节点数 = min(count, 9) + 1 ≤ 10）
+    // 4. 添加新节点（此时该 BB 节点数 = min(count, 4) + 1 ≤ 5）
     branchConstaints.push_back(branchNode);
   }
 }

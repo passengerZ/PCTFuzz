@@ -16,7 +16,6 @@ ExprASTVisitor::~ExprASTVisitor() {}
   }
 // Dispatch to appropriate visitor method
 void ExprASTVisitor::visit(ExprRef e) {
-  //printf("[zgf dbg] e : %s\n",e->toStr().c_str());
   switch (e->kind()) {
   case qsym::Kind::Bool:
   case qsym::Kind::Constant:

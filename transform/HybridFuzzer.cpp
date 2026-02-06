@@ -96,54 +96,47 @@ int main(int argc, char* argv[]) {
   std::vector<DeadZone> deadZones;
   std::set<uint32_t> deadBB;
 
-  uint32_t cnt = 0, stable = 0, batch_size = 8;
-  bool updateDeadZone = false;
+  uint32_t cnt = 0, batch_size = 8;
+  uint32_t updateDeadZone = 0;
 
   while (true) {
     cnt ++;
+    // compute the evaluator
+    auto now = std::chrono::steady_clock::now();
+
     std::cerr << "[PCT] Loops : " << cnt << "\n";
     auto new_testcase = afl_config.best_new_testcase(state.processed_files,
                                                      state.fileHashes);
     if (new_testcase.has_value()) {
-      auto fsize = fs::file_size(new_testcase.value());
-      std::cerr << "[PCT] Sync AFL++ best : " << new_testcase.value().string()
-                << ", file size : " << fsize << "\n";
+//      auto fsize = fs::file_size(new_testcase.value());
+//      std::cerr << "[PCT] Sync AFL++ best : " << new_testcase.value().string()
+//                << ", file size : " << fsize << "\n";
 
       state.processed_files.insert(new_testcase.value());
       fs::path local_testcase =
           SymCC::copy_testcase(new_testcase.value(), state.sync, new_testcase.value());
       state.run_afl_input(
           local_testcase, symcc, afl_config, executionTree);
-      batch_size = 8;
     }
     else{
-      std::this_thread::sleep_for(seconds(1));
-      batch_size = 32;
+      std::vector<TreeNode *> willbeVisit =
+          executionTree->selectDeepestNodes(batch_size);
+      state.run_pct_input(&willbeVisit, symcc, afl_config, executionTree);
     }
 
-    // compute the evaluator
-    auto now = std::chrono::steady_clock::now();
+    if (cnt % 50 == 0 && deadZones.size() < 50){
+      // make sure in curr_depth, there are no willbeVisited nodes
+      std::vector<fs::path> unvis_seeds =
+          afl_config.get_unvis_seeds(state.queue.path, state.concoliced_files);
 
-    // make sure in curr_depth, there are no willbeVisited nodes
-    std::vector<fs::path> unvis_seeds =
-        afl_config.get_unvis_seeds(state.queue.path, state.concoliced_files);
+      for (const auto& ce_seed : unvis_seeds)
+        state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
+      executionTree->cleanTobeVisited();
 
-    for (const auto& ce_seed : unvis_seeds)
-      state.run_symcc_input(ce_seed, symcc, afl_config, executionTree);
+      std::cerr << "[PCT] Replaied Symcc testcases : " << unvis_seeds.size()
+                << ", left Nodes: " << executionTree->tobeVisited.size() << "\n";
 
-    std::cerr << "[PCT] Replaied Symcc testcases : " << unvis_seeds.size()
-              << ", left Nodes: " << executionTree->tobeVisited.size()
-              << ", stable: " << stable << "\n";
-
-    std::vector<TreeNode *> willbeVisit =
-        executionTree->selectDeepestNodes(batch_size);
-    state.run_pct_input(&willbeVisit, symcc, afl_config, executionTree);
-    
-    if (deadZones.size() < 50){
       std::vector<TreeNode *> deadNodes = executionTree->selectDeadNode();
-
-      std::cerr << "[PCT] Construct Dead Zone : " << deadZones.size()
-                << ", stable: " << stable << ", isUpdate: " << updateDeadZone << "\n";
       for (auto node : deadNodes) {
         uint32_t BBID = node->data.currBB;
         std::set<uint32_t> domBB = g_searcher->computeDominatorsFor(BBID);
@@ -169,21 +162,20 @@ int main(int argc, char* argv[]) {
         if (!isCollected && !dzone.domNodes.empty()){
           deadZones.push_back(std::move(dzone));
           deadBB.insert(node->data.currBB);
-          updateDeadZone = true;
-          stable = 0;
+          updateDeadZone += 1;
         }
       }
 
-      if(stable > 20 && updateDeadZone){
+      std::cerr << "[PCT] Construct Dead Zone : " << deadZones.size()
+                << ", isUpdate: " << updateDeadZone << "\n";
+
+      if((updateDeadZone >= 5) || deadZones.size() >= 50){
         PCT::TransformPass TP;
         if (TP.buildEvaluator(executionTree, &deadZones)){
           TP.dumpEvaluator(state.evaluator_file.string());
           std::cerr << "[STOP AFL] : " << state.evaluator_file.string() << "\n";
         }
-        updateDeadZone = false;
-        stable = 0;
-      }else{
-        stable ++;
+        updateDeadZone = 0;
       }
     }
 

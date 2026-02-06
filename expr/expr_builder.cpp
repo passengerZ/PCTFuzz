@@ -128,12 +128,27 @@ ExprRef ExprBuilder::createLsb(ExprRef e) {
 }
 
 ExprRef ExprBuilder::bitToBool(ExprRef e) {
-  QSYM_ASSERT(e->bits() == 1);
+  //QSYM_ASSERT(e->bits() == 1);
   ExprRef one = createConstant(1, e->bits());
   return createEqual(e, one);
 }
 
 ExprRef ExprBuilder::boolToBit(ExprRef e, UINT32 bits) {
+  if (auto eq_e = castAs<EqualExpr>(e)){
+    if (auto ce_l = castAs<ConstantExpr>(eq_e->getChild(0))){
+      if (ce_l->value() == 0)
+        return createNot(createExtract(eq_e->getChild(1), 0, bits));
+      else
+        return createExtract(eq_e->getChild(1), 0, bits);
+    }
+    if (auto ce_r = castAs<ConstantExpr>(eq_e->getChild(1))){
+      if (ce_r->value() == 0)
+        return createNot(createExtract(eq_e->getChild(0), 0, bits));
+      else
+        return createExtract(eq_e->getChild(0), 0, bits);
+    }
+  }
+
   ExprRef e1 = createConstant(1, bits);
   ExprRef e0 = createConstant(0, bits);
   return createIte(e, e1, e0);
@@ -360,6 +375,11 @@ ExprRef CommonSimplifyExprBuilder::createAnd(ExprRef l, ExprRef r)
     }
   }
 
+  if (l->isLogic())
+    l = boolToBit(l, l->bits());
+  if (r->isLogic())
+    r = boolToBit(r, r->bits());
+
   return ExprBuilder::createAnd(l, r);
 }
 
@@ -395,6 +415,11 @@ ExprRef CommonSimplifyExprBuilder::createOr(ExprRef l, ExprRef r) {
     }
   }
 
+  if (l->isLogic())
+    l = boolToBit(l, l->bits());
+  if (r->isLogic())
+    r = boolToBit(r, r->bits());
+
   return ExprBuilder::createOr(l, r);
 }
 
@@ -425,6 +450,11 @@ ExprRef CommonSimplifyExprBuilder::createXor(ExprRef l, ExprRef r) {
       }
     }
   }
+
+  if (l->isLogic())
+    l = boolToBit(l, l->bits());
+  if (r->isLogic())
+    r = boolToBit(r, r->bits());
 
   return ExprBuilder::createXor(l, r);
 }
@@ -498,6 +528,23 @@ ExprRef CommonSimplifyExprBuilder::createEqual(ExprRef l, ExprRef r) {
   if (auto be_r = castAs<BoolExpr>(r))
     return (be_r->value()) ? l : createLNot(l);
 
+  if (auto constant_l = castAs<ConstantExpr>(l)){
+    if (r->isLogic()){
+      if (constant_l->value() == 1)
+        return r;
+      else
+        return createNot(r);
+    }
+  }
+  if (auto constant_r = castAs<ConstantExpr>(r)){
+    if (l->isLogic()){
+      if (constant_r->value() == 1)
+        return l;
+      else
+        return createNot(l);
+    }
+  }
+
   return ExprBuilder::createEqual(l, r);
 }
 
@@ -565,6 +612,11 @@ ExprRef ConstantFoldingExprBuilder::createLAnd(ExprRef l, ExprRef r) {
     return createBool(ce0->value().getBoolValue() &&
                       ce1->value().getBoolValue());
 
+  if (!l->isLogic())
+    l = bitToBool(l);
+  if (!r->isLogic())
+    r = bitToBool(r);
+
   return ExprBuilder::createLAnd(l, r);
 }
 
@@ -574,8 +626,13 @@ ExprRef ConstantFoldingExprBuilder::createLOr(ExprRef l, ExprRef r) {
 
   if (be0 != NULL && be1 != NULL)
     return createBool(be0->value() || be1->value());
-  else
-    return ExprBuilder::createLOr(l, r);
+
+  if (!l->isLogic())
+    l = bitToBool(l);
+  if (!r->isLogic())
+    r = bitToBool(r);
+
+  return ExprBuilder::createLOr(l, r);
 }
 
 ExprRef ConstantFoldingExprBuilder::createConcat(ExprRef l, ExprRef r) {
@@ -662,6 +719,7 @@ ExprRef ConstantFoldingExprBuilder::createLNot(ExprRef e) {
       return createEqual(e->getChild(0), createConstant(1, 1));
     }
   }
+
   return ExprBuilder::createLNot(e);
 }
 
@@ -1017,8 +1075,7 @@ ExprRef SymbolicExprBuilder::createAnd(ExprRef l, ExprRef r) {
       return createAnd(nce_l, nce_r);
     }
   }
-  else
-    return ExprBuilder::createAnd(l, r);
+  return ExprBuilder::createAnd(l, r);
 }
 
 ExprRef SymbolicExprBuilder::createAnd(ConstantExprRef l, NonConstantExprRef r) {
@@ -1041,6 +1098,7 @@ ExprRef SymbolicExprBuilder::createAnd(NonConstantExprRef l, NonConstantExprRef 
       }
     }
   }
+
   return ExprBuilder::createAnd(l, r);
 }
 
@@ -1118,6 +1176,11 @@ ExprRef SymbolicExprBuilder::createEqual(ExprRef l, ExprRef r) {
   if (l == r)
     return createTrue();
 
+  if (l->isLogic())
+    l = boolToBit(l, l->bits());
+  if (r->isLogic())
+    r = boolToBit(r, r->bits());
+
   return ExprBuilder::createEqual(l, r);
 }
 
@@ -1131,6 +1194,11 @@ ExprRef SymbolicExprBuilder::createLOr(ExprRef l, ExprRef r) {
 
   if (auto BE_R = castAs<BoolExpr>(r))
     return BE_R->value() ? createTrue() : l;
+
+  if (!l->isLogic())
+    l = bitToBool(l);
+  if (!r->isLogic())
+    r = bitToBool(r);
 
   return ExprBuilder::createLOr(l, r);
 }
@@ -1148,6 +1216,11 @@ ExprRef SymbolicExprBuilder::createLAnd(ExprRef l, ExprRef r) {
   if (auto CE_R = castAs<ConstantExpr>(r))
     return CE_R->value().getBoolValue() ? l : createFalse();
 
+  if (!l->isLogic())
+    l = bitToBool(l);
+  if (!r->isLogic())
+    r = bitToBool(r);
+
   return ExprBuilder::createLAnd(l, r);
 }
 
@@ -1156,6 +1229,10 @@ ExprRef SymbolicExprBuilder::createLNot(ExprRef e) {
     return createBool(!BE->value());
   if (auto NE = castAs<LNotExpr>(e))
     return NE->expr();
+
+  if (!e->isLogic())
+    e = bitToBool(e);
+
   return ExprBuilder::createLNot(e);
 }
 
